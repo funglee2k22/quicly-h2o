@@ -59,7 +59,7 @@ void from_tcp_to_quic(int tcp_fd, int quic_fd, quicly_conn_t *client, quicly_str
         return;
     } 
 
-    if (quicly_send(client, stream, buf, sizeof(buf)) != 0) {
+    if (send_quicly_msg(client, buf, sizeof(buf)) != 0) {
         perror("quicly_send failed");
         return;
     }
@@ -124,7 +124,7 @@ void from_quic_to_tcp(int quic_fd, int tcp_fd, quicly_conn_t *client, quicly_str
     // to a create a new TCP connection towards the Internet server.  
     pep_header_t pep_header = { .addr = orig_dst };
 
-    if (send_quicly_message(stream, (void *) &pep_header, sizeof(pep_header)) != 0) {
+    if (send_quicly_msg(client, (void *) &pep_header, sizeof(pep_header)) != 0) {
         perror("failed to send PEP header");
         goto error;
     }
