@@ -38,6 +38,46 @@ ptls_context_t *get_tlsctx()
     return &tlsctx;
 }
 
+int create_tcp_listener(short port)
+{ 
+    int fd;
+    struct sockaddr_in sa;
+    
+    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("socket failed");
+        return -1;
+    }
+     
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        return -1;
+    }
+
+#ifdef SO_IP 
+    if (setsockopt(fd, SO_IP, IP_TRANSPARENT, &(int){1}, sizeof(int)) != 0) {
+        perror("setsockopt(IP_TRANSPARENT) failed");
+        return -1;
+    }
+#endif 
+    
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    if (bind(fd, (void *)&sa, sizeof(sa)) != 0) {
+        perror("bind failed");
+        return -1;
+    }
+
+    if (listen(fd, 128) != 0) {
+        perror("listen failed");
+        return -1;
+    }
+
+    return fd;
+}
+
 int create_udp_listener(short port)
 {
     int fd;
@@ -91,30 +131,6 @@ int create_udp_client_socket(char *hostname, short port, struct sockaddr_storage
 }
 
 
-
-
-int create_quic_client_stream(quicly_conn_t *client, quicly_stream_t *stream, 
-    char *host, struct sockaddr_storage *sa)  
-{ 
-    int ret = 0; 
-    extern quicly_context_t client_ctx;
-    extern quicly_cid_plaintext_t next_cid;
-
-    if ((ret = quicly_connect(&client, &client_ctx, host, (struct sockaddr *)&sa, 
-                                NULL, &next_cid, ptls_iovec_init(NULL, 0), 
-                                NULL, NULL, NULL)) != 0) {
-        fprintf(stderr, "quicly_connect() failed:%d\n", ret);
-        return -1;
-    }
-
-    if ((ret = quicly_open_stream(client, &stream, 0)) != 0) { 
-        fprintf(stderr, "quicly_open_stream() failed:%d\n", ret);
-        return -1;
-    }
-
-    return 0; 
-}
-
 int send_quicly_msg(quicly_conn_t *conn, const void *data, size_t len)
 {
     if (!quicly_connection_is_ready(conn)) { 
@@ -126,5 +142,21 @@ int send_quicly_msg(quicly_conn_t *conn, const void *data, size_t len)
     quicly_send_datagram_frames(conn, &datagram, 1);
 
     fprintf(stdout, "sent QUIC message of size:%d\n", len);        
+    return 0;
+}
+
+int get_original_dest_addr(int fd, struct sockaddr_storage *sa)
+{
+    socklen_t salen = sizeof(*sa);
+
+#ifdef SO_ORIGINAL_DST
+    if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, sa, &salen) != 0) {
+        perror("getsockopt(SO_ORIGINAL_DST) failed");
+        return -1;
+    }
+#else 
+    return -1;
+#endif 
+
     return 0;
 }
