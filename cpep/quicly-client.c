@@ -98,27 +98,24 @@ void from_quic_to_tcp(int quic_fd, int tcp_fd, quicly_conn_t *client, quicly_str
  */
  void handle_client(int tcp_fd, char *host, short port) 
 {
-    int ret = 0;
-
     struct sockaddr_storage orig_dst;
+
     if (get_original_dest_addr(tcp_fd, &orig_dst) != 0) {
         perror("failed to get original destination address");
         goto error;
     }
 
     int quic_fd;
-    struct sockaddr_storage sa;
-    socklen_t salen;
-
     quic_fd = create_udp_client_socket(host, port, &orig_dst, sizeof(orig_dst));
     if (quic_fd < 0) {
         perror("failed to create UDP socket for QUIC");
         goto error;
     }
 
+    struct sockaddr_storage sa;
     quicly_conn_t *client = NULL;
     quicly_stream_t *stream = NULL;
-    if (create_quic_clt_stream(client, stream, host, &sa) != 0) {
+    if (create_quic_client_stream(client, stream, host, &sa) != 0) {
         perror("failed to create QUIC stream");
         goto error;
     }
@@ -169,7 +166,6 @@ int run_client_loop(int listen_fd, char *quic_srv, short quic_port)
 {
     struct sockaddr_in tcp_remote_addr;
     socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
-    int ret = 0;
     pid_t pid;
     
     while (1) { 
@@ -196,14 +192,15 @@ int run_client_loop(int listen_fd, char *quic_srv, short quic_port)
     return 0;
 }
 
+#if 0
 static void client_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int err,
     uint64_t frame_type, const char *reason, size_t reason_len)
 {
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
-        fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", 
+        fprintf(stderr, "transport close:code=0x%lu ;frame=%lu ;reason=%.*s\n", 
             QUICLY_ERROR_GET_ERROR_CODE(err), frame_type, (int)reason_len, reason);
     } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
-        fprintf(stderr, "application close:code=0x%" PRIx16 ";reason=%.*s\n", 
+        fprintf(stderr, "application close:code=0x%lu ;reason=%.*s\n", 
             QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len, reason);
     } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
         fprintf(stderr, "stateless reset\n");
@@ -211,16 +208,17 @@ static void client_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t 
         fprintf(stderr, "unexpected close:code=%d\n", err);
     }
 }
+#endif
 
-static void client_on_stop_sending(quicly_stream_t *stream, int err)
+static void client_on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
-    fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received STOP_SENDING: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
-static void client_on_receive_reset(quicly_stream_t *stream, int err)
+static void client_on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
-    fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received RESET_STREAM: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
@@ -244,7 +242,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     quicly_streambuf_ingress_shift(stream, input.len);
 }
 
-static int client_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static quicly_error_t client_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     static const quicly_stream_callbacks_t stream_callbacks = {
         quicly_streambuf_destroy, 
@@ -263,18 +261,18 @@ static int client_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *st
 }
 
 
-static quicly_stream_open_t stream_open = {&client_on_stream_open};
-static quicly_closed_by_remote_t closed_by_remote = {&client_on_conn_close}; 
+static quicly_stream_open_t stream_open = {client_on_stream_open};
+//static quicly_closed_by_remote_t closed_by_remote = {&client_on_conn_close}; 
 
 int setup_client_ctx()
 { 
-    setup_session_cache(get_tlsctx()); 
+    //setup_session_cache(get_tlsctx()); 
     quicly_amend_ptls_context(get_tlsctx());
     
     client_ctx = quicly_spec_context;
     client_ctx.tls = get_tlsctx();
     client_ctx.stream_open = &stream_open;
-    client_ctx.closed_by_remote = &closed_by_remote;
+    //client_ctx.closed_by_remote = &closed_by_remote;
     client_ctx.transport_params.max_stream_data.uni = UINT32_MAX;
     client_ctx.transport_params.max_stream_data.bidi_local = UINT32_MAX;
     client_ctx.transport_params.max_stream_data.bidi_remote = UINT32_MAX;
@@ -288,19 +286,13 @@ int setup_client_ctx()
 int main(int argc, char **argv)
 { 
     char *host = "127.0.0.1";     //quic server address 
-    short port = 4433, tcp_listen_port = 443;   //port is quic server listening UDP port 
-    char *cert_path = "server.crt";
-    char *key_path = "server.key";
+    short port = 4433, tcp_lst_port = 443;   //port is quic server listening UDP port 
     
-    int tcp_fd, quic_fd;  
-    quicly_stream_t *stream;
-    quicly_conn_t *client = NULL;
-    int ret = 0;
-
+    int tcp_fd;  
     setup_client_ctx(); 
 
     //create a TCP listener 
-    tcp_fd = create_tcp_listener(tcp_listen_port);
+    tcp_fd = create_tcp_listener(tcp_lst_port);
     if (tcp_fd < 0) {
         perror("failed to create TCP listener and terminating");
         exit(1);
