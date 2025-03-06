@@ -161,6 +161,26 @@ error:
     return;
 }
 
+int create_quic_client_stream(quicly_conn_t *client, quicly_stream_t *stream, 
+    char *host, struct sockaddr_storage *sa)  
+{ 
+    int ret = 0; 
+    
+    if ((ret = quicly_connect(&client, &client_ctx, host, (struct sockaddr *)&sa, 
+                                NULL, &next_cid, ptls_iovec_init(NULL, 0), 
+                                NULL, NULL, NULL)) != 0) {
+        fprintf(stderr, "quicly_connect() failed:%d\n", ret);
+        return -1;
+    }
+
+    if ((ret = quicly_open_stream(client, &stream, 0)) != 0) { 
+        fprintf(stderr, "quicly_open_stream() failed:%d\n", ret);
+        return -1;
+    }
+
+    return 0; 
+}
+
 
 int run_client_loop(int listen_fd, char *quic_srv, short quic_port)
 {
