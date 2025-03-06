@@ -20,110 +20,211 @@
 #include "quicly.h"
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
-
-typedef struct { 
-    struct sockaddr_in addr;
-    short port; 
-} pep_header_t;
-
-typedef struct {
-    int tcp_sk; //
-    char *quic_srv; 
-    short quic_srv_port;  
-} thread_data_t;
-
-//global variables 
-static quicly_context_t ctx;  //the QUIC context
-static quicly_cid_plaintext_t next_cid; // the CID seed 
-
-int create_tcp_listener(short port); 
-void run_loop(int fd); 
-void *handle_client(void *data);
-
-static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
-static int on_stream_ready(quicly_stream_t *stream);
-static void on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
-static void on_stop_sending(quicly_stream_t *stream, int err);
-static void on_receive_reset(quicly_stream_t *stream, int err);
-
-static int load_private_key(ptls_openssl_sign_certificate_t *psign_certificate, char *key_path); 
-static int load_certificates(ptls_context_t *tlsctx, char *cert_path);
-static int setup_ctx_quic(char *cert_path, char *key_path);
-
-int create_udp_clt_socket(char *hostname, short port, struct sockaddr_storage *sa, socklen_t *salen);
-int create_quic_clt_stream(quicly_conn_t *client, quicly_stream_t *stream, char *host, struct sockaddr_storage *sa);
+#include "common.h"
 
 
-int create_tcp_listener(short port) 
+static quicly_context_t client_ctx;
+static quicly_cid_plaintext_t next_cid; 
+
+static void process_msg(quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
 {
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = INADDR_ANY; 
+    size_t off = 0, i;
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        perror("socket() :");
-        return -1;
+    /* split UDP datagram into multiple QUIC packets */
+    while (off < dgram_len) {
+        quicly_decoded_packet_t decoded;
+        if (quicly_decode_packet(&client_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
+            return;
+        /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
+        for (i = 0; conns[i] != NULL; ++i)
+            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
+                break;
+        if (conns[i] != NULL) {
+            /* let the current connection handle ingress packets */
+            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
+        }
+    }
+}
+
+
+void from_tcp_to_quic(int tcp_fd, int quic_fd, quicly_conn_t *client, quicly_stream_t *stream)
+{
+    uint8_t buf[4096];
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+    ssize_t rret;
+
+    if ((rret = recvfrom(tcp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&sa, &salen)) == -1) {
+        perror("recvfrom failed");
+        return;
+    } 
+
+    if (quicly_send(client, stream, buf, sizeof(buf)) != 0) {
+        perror("quicly_send failed");
+        return;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0) { 
-        perror("setsockopt (SO_REUSEADDR): ");
-        close(fd);
-        return -1;
-    }
-
-    //SOL_IP is not defained on MacOS 
-    if (setsockopt(fd, SOL_IP, IP_TRANSPARENT, &(int){1}, sizeof(int)) < 0) {  
-        perror("setsockopt (IP_TRANSPARENT): ");
-        close(fd);
-        return -1;
-    }
-
-    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("bind");
-        close(fd);
-        return -1;
-    }
-
-    if (listen(fd, 10) < 0) {
-        perror("listen: ");
-        close(fd);
-        return -1;
-    }
-
-    return fd;
+    return;
 }
 
 
 
-static void on_stop_sending(quicly_stream_t *stream, int err)
+void from_quic_to_tcp(int quic_fd, int tcp_fd, quicly_conn_t *client, quicly_stream_t *stream)
+{
+    
+    quicly_conn_t *conns[256] = {client}; 
+    uint8_t buf[4096];
+    struct sockaddr_storage sa;
+    struct iovec vec = {.iov_base = buf, .iov_len = sizeof(buf)};
+    struct msghdr msg = {.msg_name = &sa, .msg_namelen = sizeof(sa), .msg_iov = &vec, .msg_iovlen = 1};
+    ssize_t rret;
+    
+    while ((rret = recvmsg(quic_fd, &msg, 0)) == -1 && errno == EINTR)
+        ;
+    
+    if (rret > 0)
+        process_msg(conns, &msg, rret);
+    
+    send(tcp_fd, buf, sizeof(buf), 0);
+    
+    return;
+}   
+
+
+/*
+ *  thread to handle one set connections, TCP conn and QUIC conn 
+ *  @param data the thread data 
+ *  @return NULL
+ */
+ void handle_client(int tcp_fd, char *host, short port) 
+{
+    int ret = 0;
+
+    struct sockaddr_storage orig_dst;
+    if (get_original_dest_addr(tcp_fd, &orig_dst) != 0) {
+        perror("failed to get original destination address");
+        goto error;
+    }
+
+    int quic_fd;
+    struct sockaddr_storage sa;
+    socklen_t salen;
+
+    quic_fd = create_udp_client_socket(host, port, &orig_dst, sizeof(orig_dst));
+    if (quic_fd < 0) {
+        perror("failed to create UDP socket for QUIC");
+        goto error;
+    }
+
+    quicly_conn_t *client = NULL;
+    quicly_stream_t *stream = NULL;
+    if (create_quic_clt_stream(client, stream, host, &sa) != 0) {
+        perror("failed to create QUIC stream");
+        goto error;
+    }
+
+    // send the first message (pep header) to the server, server will use this infor
+    // to a create a new TCP connection towards the Internet server.  
+    pep_header_t pep_header = { .addr = orig_dst };
+
+    if (send_quicly_message(stream, (void *) &pep_header, sizeof(pep_header)) != 0) {
+        perror("failed to send PEP header");
+        goto error;
+    }
+
+    // big select loop to handle both TCP and QUIC connections 
+    while (1) {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(tcp_fd, &readfds);
+        FD_SET(quic_fd, &readfds);
+
+        if (select(tcp_fd > quic_fd ? tcp_fd + 1 : quic_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+            perror("select failed");
+            goto error;
+        }
+
+        if (FD_ISSET(tcp_fd, &readfds)) {
+            // handle TCP connection 
+            from_tcp_to_quic(tcp_fd, quic_fd, client, stream);
+        }
+
+        if (FD_ISSET(quic_fd, &readfds)) {
+            // handle QUIC connection 
+            from_quic_to_tcp(quic_fd, tcp_fd, client, stream);
+        }
+    }
+
+    //TODO: add signal handling here and should send all the pending data before exit
+    
+error:
+    close(tcp_fd);
+    close(quic_fd); 
+
+    return;
+}
+
+
+int run_client_loop(int listen_fd, char *quic_srv, short quic_port)
+{
+    struct sockaddr_in tcp_remote_addr;
+    socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
+    int ret = 0;
+    pid_t pid;
+    
+    while (1) { 
+        int client_fd = accept(listen_fd, (struct sockaddr *)&tcp_remote_addr, &tcp_addr_len);
+        if (client_fd < 0) {
+            perror("accept: ");
+            close(listen_fd);
+            return -1;
+        }
+        
+        pid = fork();
+
+        if (!pid) { 
+            close(listen_fd);
+            handle_client(client_fd, quic_srv, quic_port);
+        } else if (pid > 0) { 
+            close(client_fd);
+        } else {
+            perror("fork: ");
+            close(listen_fd);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void client_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int err,
+    uint64_t frame_type, const char *reason, size_t reason_len)
+{
+    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+        fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", 
+            QUICLY_ERROR_GET_ERROR_CODE(err), frame_type, (int)reason_len, reason);
+    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
+        fprintf(stderr, "application close:code=0x%" PRIx16 ";reason=%.*s\n", 
+            QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len, reason);
+    } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
+        fprintf(stderr, "stateless reset\n");
+    } else {
+        fprintf(stderr, "unexpected close:code=%d\n", err);
+    }
+}
+
+static void client_on_stop_sending(quicly_stream_t *stream, int err)
 {
     fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
-static void on_receive_reset(quicly_stream_t *stream, int err)
+static void client_on_receive_reset(quicly_stream_t *stream, int err)
 {
     fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
-static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
-{
-    static const quicly_stream_callbacks_t stream_callbacks = {
-        quicly_streambuf_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_stop_sending, on_receive,
-        on_receive_reset};
-    int ret;
-
-    if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0)
-        return ret;
-    stream->callbacks = &stream_callbacks;
-    return 0;
-}
-
-static void on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     /* read input to receive buffer */
     if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
@@ -143,225 +244,45 @@ static void on_receive(quicly_stream_t *stream, size_t off, const void *src, siz
     quicly_streambuf_ingress_shift(stream, input.len);
 }
 
-static int on_stream_ready(quicly_stream_t *stream)
+static int client_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
-    /* send the input to the active stream */
-    assert(stream != NULL);
-    //TODO: implement this function
-    return 0;
-}
-/*
-*/
-static int load_private_key(ptls_openssl_sign_certificate_t *psign_certificate, char *key_path)
-{
-    FILE *fp;
-    if ((fp = fopen(key_path, "r")) == NULL) {
-        fprintf(stderr, "failed to open file:%s:%s\n", key_path, strerror(errno));
-        return -1;
-    }
-    
-    EVP_PKEY *pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
-    fclose(fp);
-    
-    if (pkey == NULL) {
-        fprintf(stderr, "failed to load private key from file:%s\n", optarg);
-        exit(1);
-    }
-            
-    ptls_openssl_init_sign_certificate(psign_certificate, pkey);
-    EVP_PKEY_free(pkey);
-
-    return 0;
-}
-
-static int load_certificates(ptls_context_t *tlsctx, char *cert_path)
-{
-    int ret;
-    if ((ret = ptls_load_certificates(tlsctx, cert_path)) != 0) {
-        fprintf(stderr, "failed to load certificates from file %s:%d\n", cert_path, ret);
-        return -1;
-    }
-    return 0; 
-}
-
-/*
- * setup the QUIC and quicly context
- * note: ctx is a global variable 
- */
-static int setup_ctx_quic(char *cert_path, char *key_path)
-{
-    int ret = 0;
-    //ctx is the global variable  
-    ptls_openssl_sign_certificate_t sign_certificate; 
-    ptls_context_t tlsctx = { 
-        .random_bytes = ptls_openssl_random_bytes,
-        .get_time = &ptls_get_time,
-        .key_exchanges = ptls_openssl_key_exchanges,
-        .cipher_suites = ptls_openssl_cipher_suites,
+    static const quicly_stream_callbacks_t stream_callbacks = {
+        quicly_streambuf_destroy, 
+        quicly_streambuf_egress_shift, 
+        quicly_streambuf_egress_emit, 
+        client_on_stop_sending, 
+        client_on_receive,
+        client_on_receive_reset
     };
-    quicly_stream_open_t stream_open = {on_stream_open};
+    int ret;
 
-    /* setup quic context */
-    ctx = quicly_spec_context;
-    ctx.tls = &tlsctx;
-    quicly_amend_ptls_context(ctx.tls);
-    ctx.stream_open = &stream_open;
-
-    /* load certificates chain */
-    if ((ret = load_certificates(&tlsctx, cert_path)) != 0) {
-        fprintf(stderr, "failed to load certificates from file %s:%d\n", cert_path, ret);
+    if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0)
         return ret;
-    }
-
-    /* load private key */
-    if ((ret = load_private_key(&sign_certificate, key_path)) != 0) {
-        fprintf(stderr, "failed to load private key from file:%s\n", key_path);
-        return ret;
-    }
-
-    tlsctx.sign_certificate = &sign_certificate.super;
-
-    if ((tlsctx.certificates.count != 0) != (tlsctx.sign_certificate != NULL)) {
-        perror("TLS key and certificates must be used together");
-        return -1;
-    }
-
-    return ret;
-}
-/* 
- * create a UDP client socket used by QUIC 
- * @param hostname the hostname of the server
- * @param port the listening port number of the server 
- * @return the file descriptor of the UDP socket 
- */
-int create_udp_clt_socket(char *hostname, short port, struct sockaddr_storage *sa, socklen_t *salen) 
-{
-    int fd;
-    struct sockaddr_in local; 
-    if (resolve_address((struct sockaddr *)sa, salen, hostname, port, AF_INET, SOCK_DGRAM, 0) != 0)
-        return -1;
-
-    /* open socket, on the specified port (as a server), or on any port (as a client) */
-    if ((fd = socket(sa.ss_family, SOCK_DGRAM, 0)) == -1) {
-        perror("socket(2) failed");
-        return -1;
-    }
-    
-    memset(&local, 0, sizeof(local)); 
-    if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
-        perror("bind(2) failed");
-        return -1;
-    }
-
-    return fd;
+    stream->callbacks = &stream_callbacks;
+    return 0;
 }
 
-int create_quic_clt_stream(quicly_conn_t *client, quicly_stream_t *stream, 
-                           char *host, struct sockaddr_storage *sa)  
+
+static quicly_stream_open_t stream_open = {&client_on_stream_open};
+static quicly_closed_by_remote_t closed_by_remote = {&client_on_conn_close}; 
+
+int setup_client_ctx()
 { 
-    int ret = 0; 
-   
-    if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, NULL, &next_cid, ptls_iovec_init(NULL, 0), NULL,
-                                  NULL, NULL)) != 0) {
-        fprintf(stderr, "quicly_connect failed:%d\n", ret);
-        return -1;
-    }
+    setup_session_cache(get_tlsctx()); 
+    quicly_amend_ptls_context(get_tlsctx());
     
-    quicly_open_stream(client, &stream, 0);
-    
-    return 0; 
-}
+    client_ctx = quicly_spec_context;
+    client_ctx.tls = get_tlsctx();
+    client_ctx.stream_open = &stream_open;
+    client_ctx.closed_by_remote = &closed_by_remote;
+    client_ctx.transport_params.max_stream_data.uni = UINT32_MAX;
+    client_ctx.transport_params.max_stream_data.bidi_local = UINT32_MAX;
+    client_ctx.transport_params.max_stream_data.bidi_remote = UINT32_MAX;
+    client_ctx.initcwnd_packets = 10;
+    client_ctx.init_cc = &quicly_cc_cubic_init;
 
-int create_quic_client(quicly_stream_t *stream, quicly_conn_t *client,
-                       struct sockaddr_storge *sa, socklen_t *salen,
-                       char *host, short port)
-{   
-    int quic_fd, ret = 0;
-    quic_fd = create_udp_clt_socket(host, port, sa, salen); 
-    if (quic_fd < 0) {
-        perror("failed to create UDP socket for QUIC");
-        return -1;
-    }
-
-    ret = create_quic_clt_stream(client, stream, host, sa);
-    if (ret != 0) { 
-        perror("failed to create QUIC stream");
-        return -1;   
-    }
-    return 0;
-} 
- 
-
-void *handle_client(void *data) 
-{
-    thread_data_t *d = (thread_data_t *)data;
-    int clt_fd = d->tcp_sk;      //incoming TCP socket 
-    char *quic_srv = d->quic_srv;
-    short quic_port = d->quic_srv_port;
-    quicly_stream_t *stream;
-    quicly_conn_t *client = NULL;
-    struct sockaddr_storage sa;
-    socklen_t salen;
-    int ret = 0;
-
-    ret = create_quic_client(stream, client, &sa, &salen, quic_srv, quic_port); 
-    if (ret != 0) {
-        perror("failed to create QUIC client");
-        goto error;
-    }
-    
-    //fill pep header, send pep header, and setup pip between to sockets; 
-    //TODO: 
-    
-error:
-    close(clt_fd);
-    free(data);
-    return NULL;
-}
-
-
-
-
-int run_client_loop(int listen_fd, char *quic_srv, short quic_port)
-{
-    struct sockaddr_in tcp_remote_addr;
-    socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
-    int ret = 0;
-    
-    while (1) { 
-        int client_fd = accept(listen_fd, (struct sockaddr *)&tcp_remote_addr, &tcp_addr_len);
-        if (client_fd < 0) {
-            perror("accept: ");
-            close(listen_fd);
-            return -1;
-        } 
-        printf("Accepted connection from %s:%d\n", inet_ntoa(tcp_remote_addr.sin_addr), ntohs(tcp_remote_addr.sin_port));
-        //create a new thread to handle the connection
-        pthread_t thread;
-        thread_data_t *data = (thread_data_t *)malloc(sizeof(data));
-        if (data == NULL) { 
-            perror("Failed to allocated memory for thread data. malloc: ");
-            close(client_fd);
-            continue;
-        } 
-
-        data->tcp_sk = client_fd;
-        data->quic_srv = quic_srv; 
-        data->quic_srv_port = quic_port;
-
-        if (pthread_create(&thread, NULL, handle_client, (void *)data) != 0) {
-            perror("Failed to create thread: ");
-            close(client_fd);
-            free(data);
-            continue;
-        }
-        pthread_detach(thread);
-    }
     return 0;
 }
-
-
-
 
 
 int main(int argc, char **argv)
@@ -376,20 +297,14 @@ int main(int argc, char **argv)
     quicly_conn_t *client = NULL;
     int ret = 0;
 
-    //TODO: resolve command line options and arguments
-    //setup the quic and quicly context 
-    //ctx is a global variable will be modifed by this function.  
-    if ((ret = setup_ctx_quic(cert_path, key_path)) != 0) {
-        fprintf(stderr, "failed to setup quic context: %d.\n", ret);
-        exit(1);
-    }
+    setup_client_ctx(); 
 
     //create a TCP listener 
     tcp_fd = create_tcp_listener(tcp_listen_port);
     if (tcp_fd < 0) {
         perror("failed to create TCP listener and terminating");
         exit(1);
-    }
+    } 
 
     run_client_loop(tcp_fd, host, port); 
 
