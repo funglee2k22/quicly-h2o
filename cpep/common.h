@@ -14,7 +14,8 @@ typedef struct {
 } pep_header_t;
 
 
- 
+int resolve_address(struct sockaddr *sa, socklen_t *salen, const char *host, short port, int family, int type, int proto);
+int get_original_dest_addr(int fd, struct sockaddr_storage *sa);
 
 ptls_context_t *get_tlsctx(); 
 
@@ -30,7 +31,7 @@ int create_quic_server_stream(quicly_conn_t *server, quicly_stream_t *stream, st
 
 int server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
 
-
+int send_quicly_msg(quicly_conn_t *conn, const void *data, size_t len);
 
 
 

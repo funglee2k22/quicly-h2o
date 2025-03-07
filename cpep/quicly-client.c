@@ -99,14 +99,15 @@ void from_quic_to_tcp(int quic_fd, int tcp_fd, quicly_conn_t *client, quicly_str
  void handle_client(int tcp_fd, char *host, short port) 
 {
     struct sockaddr_storage orig_dst;
+    socklen_t len = sizeof(orig_dst); 
+    int quic_fd = -1;
 
     if (get_original_dest_addr(tcp_fd, &orig_dst) != 0) {
         perror("failed to get original destination address");
         goto error;
     }
-
-    int quic_fd;
-    quic_fd = create_udp_client_socket(host, port, &orig_dst, sizeof(orig_dst));
+    
+    quic_fd = create_udp_client_socket(host, port, &orig_dst, &len);
     if (quic_fd < 0) {
         perror("failed to create UDP socket for QUIC");
         goto error;

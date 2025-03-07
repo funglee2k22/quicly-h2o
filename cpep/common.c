@@ -53,12 +53,11 @@ int create_tcp_listener(short port)
         return -1;
     }
 
-#ifdef SO_IP 
-    if (setsockopt(fd, SO_IP, IP_TRANSPARENT, &(int){1}, sizeof(int)) != 0) {
+
+    if (setsockopt(fd, SOL_IP, IP_TRANSPARENT, &(int){1}, sizeof(int)) != 0) {
         perror("setsockopt(IP_TRANSPARENT) failed");
         return -1;
     }
-#endif 
     
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
@@ -141,7 +140,7 @@ int send_quicly_msg(quicly_conn_t *conn, const void *data, size_t len)
     ptls_iovec_t datagram = ptls_iovec_init(data, len);
     quicly_send_datagram_frames(conn, &datagram, 1);
 
-    fprintf(stdout, "sent QUIC message of size:%d\n", len);        
+    fprintf(stdout, "sent QUIC message of size: %ld\n", len);        
     return 0;
 }
 
@@ -149,14 +148,39 @@ int get_original_dest_addr(int fd, struct sockaddr_storage *sa)
 {
     socklen_t salen = sizeof(*sa);
 
-#ifdef SO_ORIGINAL_DST
+#ifndef SO_ORIGINAL_DST 
+#define SO_ORIGINAL_DST 80 
     if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, sa, &salen) != 0) {
         perror("getsockopt(SO_ORIGINAL_DST) failed");
         return -1;
     }
-#else 
-    return -1;
 #endif 
+    return 0;
+}
 
+
+int resolve_address(struct sockaddr *sa, socklen_t *salen, const char *host, const short port, int family, int type,
+                           int proto)
+{
+    struct addrinfo hints, *res;
+    char str_port[10] = {0}; 
+    int err;
+
+    snprintf(str_port, sizeof(str_port), "%d", port);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = family;
+    hints.ai_socktype = type;
+    hints.ai_protocol = proto;
+    hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV | AI_PASSIVE;
+    if ((err = getaddrinfo(host, str_port, &hints, &res)) != 0 || res == NULL) {
+        fprintf(stderr, "failed to resolve address:%s:%s:%s\n", host, str_port,
+                err != 0 ? gai_strerror(err) : "getaddrinfo returned NULL");
+        return -1;
+    }
+
+    memcpy(sa, res->ai_addr, res->ai_addrlen);
+    *salen = res->ai_addrlen;
+
+    freeaddrinfo(res);
     return 0;
 }
