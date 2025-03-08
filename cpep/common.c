@@ -111,8 +111,10 @@ int create_udp_client_socket(char *hostname, short port, struct sockaddr_storage
 {
     int fd = -1;
     struct sockaddr_in local;
+    char str_port[10] = {0};
+    snprintf(str_port, sizeof(str_port), "%d", port);
 
-    if (resolve_address((struct sockaddr *)sa, salen, hostname, port, AF_INET, SOCK_DGRAM, 0) != 0)
+    if (resolve_address((struct sockaddr *)sa, salen, hostname, str_port, AF_INET, SOCK_DGRAM, 0) != 0)
         return -1;
 
     if ((fd = socket(sa->ss_family, SOCK_DGRAM, 0)) == -1) {
@@ -158,29 +160,3 @@ int get_original_dest_addr(int fd, struct sockaddr_storage *sa)
     return 0;
 }
 
-
-int resolve_address(struct sockaddr *sa, socklen_t *salen, const char *host, const short port, int family, int type,
-                           int proto)
-{
-    struct addrinfo hints, *res;
-    char str_port[10] = {0}; 
-    int err;
-
-    snprintf(str_port, sizeof(str_port), "%d", port);
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = family;
-    hints.ai_socktype = type;
-    hints.ai_protocol = proto;
-    hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV | AI_PASSIVE;
-    if ((err = getaddrinfo(host, str_port, &hints, &res)) != 0 || res == NULL) {
-        fprintf(stderr, "failed to resolve address:%s:%s:%s\n", host, str_port,
-                err != 0 ? gai_strerror(err) : "getaddrinfo returned NULL");
-        return -1;
-    }
-
-    memcpy(sa, res->ai_addr, res->ai_addrlen);
-    *salen = res->ai_addrlen;
-
-    freeaddrinfo(res);
-    return 0;
-}

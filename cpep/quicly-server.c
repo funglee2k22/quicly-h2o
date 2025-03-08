@@ -21,17 +21,21 @@
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
 #include "common.h"
-
+#include <picotls/../../t/util.h>
 
 static quicly_context_t server_ctx;
 static quicly_cid_plaintext_t next_cid; 
 
-static quicly_stream_open_t on_stream_open = {&server_on_stream_open};
-static quicly_closed_by_remote_t closed_by_remote = {&server_on_conn_close};
+static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
+static void server_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn,
+	  int err, uint64_t frame_type, const char *reason, size_t reason_len);
+
+static quicly_stream_open_t on_stream_open = {server_on_stream_open};
+static quicly_closed_by_remote_t closed_by_remote = {server_on_conn_close};
 
 static void server_on_stop_sending(quicly_stream_t *stream, int err)
 {
-    fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received STOP_SENDING: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
@@ -58,7 +62,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
 
 static void server_on_receive_reset(quicly_stream_t *stream, int err)
 {
-    fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received RESET_STREAM: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
@@ -66,10 +70,10 @@ static void server_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t 
     uint64_t frame_type, const char *reason, size_t reason_len)
 {
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
-        fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", 
+        fprintf(stderr, "transport close:code=0x%lu ;frame=%lu ;reason=%.*s\n", 
                 QUICLY_ERROR_GET_ERROR_CODE(err), frame_type, (int)reason_len, reason);
     } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
-        fprintf(stderr, "application close:code=0x%" PRIx16 ";reason=%.*s\n", 
+        fprintf(stderr, "application close:code=0x%lu ;reason=%.*s\n", 
                 QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len, reason);
     } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
         fprintf(stderr, "stateless reset\n");
@@ -78,7 +82,7 @@ static void server_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t 
     return;
 }
 
-static int server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     static const quicly_stream_callbacks_t stream_callbacks = {
         quicly_streambuf_destroy, 
@@ -124,12 +128,13 @@ static void server_read_cb(EV_P_ ev_io *w, int revents)
     server_send_pending();
 }
 
-
 static void server_timeout_cb(EV_P_ ev_timer *w, int revents)
 {
     //TODO: implement timeout handling
     printf("PEP Server Timeout\n");
-}
+} 
+
+
 
 void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
 {
@@ -148,17 +153,73 @@ void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
     server_ctx.init_cc = &quicly_cc_cubic_init;
     server_ctx.initcwnd_packets = 10; 
     
-    if (logfile)
-        setup_log_event(server_ctx, logfile); 
-    
     load_certificate_chain(server_ctx.tls, cert);
     load_private_key(server_ctx.tls, key);
    
     return; 
 }
 
+static void process_msg(quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
+{
+    size_t off = 0, i;
+
+    /* split UDP datagram into multiple QUIC packets */
+    while (off < dgram_len) {
+        quicly_decoded_packet_t decoded;
+        if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
+            return;
+        /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
+        for (i = 0; conns[i] != NULL; ++i)
+            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
+                break;
+        if (conns[i] != NULL) {
+            /* let the current connection handle ingress packets */
+            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
+        }
+    }
+}
 
 
+void from_tcp_to_quic(int tcp_fd, int quic_fd, quicly_conn_t *client, quicly_stream_t *stream)
+{
+    uint8_t buf[4096];
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+    ssize_t rret;
+
+    if ((rret = recvfrom(tcp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&sa, &salen)) == -1) {
+        perror("recvfrom failed");
+        return;
+    }
+
+    if (send_quicly_msg(client, buf, sizeof(buf)) != 0) {
+        perror("quicly_send failed");
+        return;
+    }
+
+    return;
+}
+
+void from_quic_to_tcp(int quic_fd, int tcp_fd, quicly_conn_t *client, quicly_stream_t *stream)
+{
+
+    quicly_conn_t *conns[256] = {client};
+    uint8_t buf[4096];
+    struct sockaddr_storage sa;
+    struct iovec vec = {.iov_base = buf, .iov_len = sizeof(buf)};
+    struct msghdr msg = {.msg_name = &sa, .msg_namelen = sizeof(sa), .msg_iov = &vec, .msg_iovlen = 1};
+    ssize_t rret;
+
+    while ((rret = recvmsg(quic_fd, &msg, 0)) == -1 && errno == EINTR)
+        ;
+
+    if (rret > 0)
+        process_msg(conns, &msg, rret);
+
+    send(tcp_fd, buf, sizeof(buf), 0);
+
+    return;
+}
 
 void run_server_loop(int quic_srv_fd)
 {
@@ -194,16 +255,12 @@ void run_server_loop(int quic_srv_fd)
     return; 
 }
 
-
-static ev_timer server_timeout; 
-
 int main(int argc, char **argv)
 {
     char *host = "127.0.0.1";     //quic server address 
     short udp_listen_port = 8443;   //port is quic server listening UDP port 
     char *cert_path = "server.crt";
     char *key_path = "server.key";
-    int ret = 0;
 
     setup_quicly_ctx(cert_path, key_path, NULL); 
     
@@ -227,7 +284,7 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    printf("QPEP Server is running, pid = %" PRIu64 ", port = %d\n", 
+    printf("QPEP Server is running, pid = %lu, port = %d\n", 
             (uint64_t)getpid(), udp_listen_port);
     
     run_server_loop(quic_srv_fd);

@@ -125,10 +125,11 @@ TARGET_LINK_LIBRARIES(simulator ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS} m)
 ADD_EXECUTABLE(examples-echo ${PICOTLS_OPENSSL_FILES} examples/echo.c)
 TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
 
-ADD_EXECUTABLE(cpep-clt ${PICOTLS_OPENSSL_FILES} cpep/quicly-client.c cpep/common.h cpep/common.c)
+ADD_EXECUTABLE(cpep-clt ${PICOTLS_OPENSSL_FILES} cpep/quicly-client.c cpep/common.c)
 TARGET_LINK_LIBRARIES(cpep-clt quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
 
-
+ADD_EXECUTABLE(cpep-srv ${PICOTLS_OPENSSL_FILES} cpep/quicly-server.c cpep/common.c)
+TARGET_LINK_LIBRARIES(cpep-srv quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS}) 
 
 ADD_EXECUTABLE(udpfw t/udpfw.c)
 

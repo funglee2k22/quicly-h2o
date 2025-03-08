@@ -7,14 +7,13 @@
 #include "picotls/openssl.h"
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
-
+#include <picotls/../../t/util.h>
 
 typedef struct { 
     struct sockaddr_storage addr;
 } pep_header_t;
 
 
-int resolve_address(struct sockaddr *sa, socklen_t *salen, const char *host, short port, int family, int type, int proto);
 int get_original_dest_addr(int fd, struct sockaddr_storage *sa);
 
 ptls_context_t *get_tlsctx(); 
@@ -29,9 +28,8 @@ int create_tcp_client_socket(char *hostname, short port, struct sockaddr_storage
 int create_quic_client_stream(quicly_conn_t *client, quicly_stream_t *stream, char *host, struct sockaddr_storage *sa);
 int create_quic_server_stream(quicly_conn_t *server, quicly_stream_t *stream, struct sockaddr_storage *sa);
 
-int server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
-
 int send_quicly_msg(quicly_conn_t *conn, const void *data, size_t len);
+
 
 
 
