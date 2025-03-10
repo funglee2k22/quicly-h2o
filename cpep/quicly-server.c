@@ -25,6 +25,18 @@
 
 static quicly_context_t server_ctx;
 static quicly_cid_plaintext_t next_cid; 
+quicly_conn_t **conns = {NULL};
+static size_t num_conns = 0;
+
+typedef struct { 
+    quicly_conn_t *conn;
+    int tcp_fd; 
+    conn_map *next; 
+} conn_map; 
+
+conn_map *conn_map_head = NULL;  
+
+quicly_conn_t **conn = NULL;
 
 static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
 static void server_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn,
@@ -59,6 +71,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
 }
+
 
 static void server_on_receive_reset(quicly_stream_t *stream, int err)
 {
@@ -102,38 +115,207 @@ static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_s
 
 #define MSG_DONTWAIT 0x80 
 
-static void server_read_cb(EV_P_ ev_io *w, int revents)
+
+
+void handle_tcp_msg(int tcp_fd, quicly_conn_t *client, quicly_stream_t *stream)
 {
-    // retrieve data
+    uint8_t buf[4096];
+    struct sockaddr_storage sa;
+    socklen_t salen = sizeof(sa);
+    ssize_t rret;
+
+    if ((rret = recvfrom(tcp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&sa, &salen)) == -1) {
+        perror("recvfrom failed");
+        return;
+    }
+
+    if (send_quicly_msg(client, buf, sizeof(buf)) != 0) {
+        perror("quicly_send failed");
+        return;
+    }
+
+    return;
+}
+
+static quicly_conn_t *find_conn(struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *packet)
+{
+    for(size_t i = 0; i < num_conns; ++i) {
+        if(quicly_is_destination(conns[i], NULL, sa, packet)) {
+            return conns[i];
+        }
+    }
+    return NULL;
+}
+
+static void append_conn(quicly_conn_t *conn)
+{
+    ++num_conns;
+    conns = realloc(conns, sizeof(quicly_conn_t*) * num_conns);
+    assert(conns != NULL);
+    conns[num_conns - 1] = conn;
+
+    *quicly_get_data(conn) = calloc(1, sizeof(int64_t));
+}
+
+static size_t remove_conn(size_t i)
+{
+    free(*quicly_get_data(conns[i]));
+    quicly_free(conns[i]);
+    memmove(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(quicly_conn_t*));
+    --num_conns;
+    return i - 1;
+}
+
+int create_tcp_connection(const char *host, short port)
+{
+    int fd;
+    struct sockaddr_in sa;
+
+    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("socket failed");
+        return -1;
+    }
+
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    inet_pton(AF_INET, host, &sa.sin_addr);
+
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == -1) {
+        perror("connect failed");
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+
+static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockaddr *sa, socklen_t salen)
+{
+    quicly_conn_t *conn = find_conn(sa, salen, packet);
+
+    if(conn == NULL) {
+        //new connect 
+        int ret = quicly_accept(&conn, &server_ctx, 0, sa, packet, NULL, &next_cid, NULL, NULL);
+        if(ret != 0) {
+            fprintf(stderr, "quicly_accept failed with code %i\n", ret);
+            return;
+        }
+        ++next_cid.master_id;
+        fprintf(stdout, "got new connection \n");
+        append_conn(conn); 
+
+        // for new connection, the payload its the original destination IP and port 
+        struct sockaddr *din = (struct sockaddr *) packet->octets.base; 
+        socklen_t din_len = packet->octets.len; 
+        int tcp_fd = create_tcp_connection(inet_ntoa(((struct sockaddr_in *)din)->sin_addr), 
+                            ntohs(((struct sockaddr_in *)din)->sin_port));
+
+        if (tcp_fd < 0) {
+            fprintf(stderr, "failed to create TCP connection.\n");
+            exit(1);
+        }
+
+        //TODO: need to implement a hash map to store the connection pair. 
+        conn_map *p = malloc(sizeof(conn_map)); 
+        p->tcp_fd = tcp_fd;
+        p->conn = conn;
+        p->next = conn_map_head;
+        conn_map_head = p; 
+    
+    } else {
+        int ret = quicly_receive(conn, NULL, sa, packet);
+        if(ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
+            fprintf(stderr, "quicly_receive returned %i\n", ret);
+            exit(1);
+        }
+        conn_map *p = conn_map_head;
+        int tcp_fd = -1; 
+        while (p) { 
+            if (p->conn == conn) {
+                tcp_fd = p->tcp_fd;
+                break;
+            }
+            p = p->next;
+        } 
+        if (tcp_fd > 0) {
+            int ssize = send(tcp_fd, packet->octets.base, packet->octets.len, 0);
+            fprintf(stdout, "send %d bytes through tcp fd %d\n", ssize, tcp_fd); 
+        } else {
+            fprintf(stdout, "could not find TCP Peer to send QUIC message \n");
+        }
+    }
+}
+
+
+void handle_quicly_msg(int quic_fd)
+{ 
     uint8_t buf[4096];
     struct sockaddr sa;
     socklen_t salen = sizeof(sa);
     quicly_decoded_packet_t packet;
     ssize_t bytes_received;
 
-    while((bytes_received = recvfrom(w->fd, buf, sizeof(buf), MSG_DONTWAIT, &sa, &salen)) != -1) {
+    while((bytes_received = recvfrom(quic_fd, buf, sizeof(buf), MSG_DONTWAIT, &sa, &salen)) != -1) {
+        fprintf(stdout, "received %d bytes from %s, port: %d \n", 
+            bytes_received, inet_ntoa(((struct sockaddr_in *)&sa)->sin_addr), ntohs(((struct sockaddr_in *)&sa)->sin_port));
+            
         for(ssize_t offset = 0; offset < bytes_received; ) {
             size_t packet_len = quicly_decode_packet(&server_ctx, &packet, buf, bytes_received, &offset);
             if(packet_len == SIZE_MAX) {
                 break;
             }
-            server_handle_packet(&packet, &sa, salen);
+
+            handle_quicly_packet(&packet, &sa, salen);
         }
     }
 
-    if(errno != EWOULDBLOCK && errno != 0) {
-        perror("recvfrom failed");
-    }
-
-    server_send_pending();
+    fprintf(stdout, "func: %s, line: %d \n", __func__, __LINE__);
+    return;
 }
 
-static void server_timeout_cb(EV_P_ ev_timer *w, int revents)
+void run_server_loop(int quic_srv_fd) 
 {
-    //TODO: implement timeout handling
-    printf("PEP Server Timeout\n");
-} 
+    fprintf(stdout, "starting server loop..."); 
+    while (1) { 
+        fd_set readfds;
+        int max_fd = quic_srv_fd;
+        conn_map *p = conn_map_head;
+        FD_ZERO(&readfds);
+        FD_SET(quic_srv_fd, &readfds); 
 
+        while (p) { 
+            FD_SET(p->tcp_fd, &readfds);
+            max_fd = (max_fd > p->tcp_fd) ? max_fd : p->tcp_fd;
+            p = p->next;
+        } 
+
+        if (select(max_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+            perror("select failed");
+            break;
+        }
+
+        if (FD_ISSET(quic_srv_fd, &readfds)) {
+            handle_quicly_msg(quic_srv_fd);   
+        }        
+                
+        //if not quic message, then it must be a tcp message from Internet side
+        p = conn_map_head;
+        quicly_stream_t *client = NULL;
+        while (p) { 
+            if (FD_ISSET(p->tcp_fd, &readfds)) {
+                client = p->stream;
+                break;
+            }
+            p = p->next;
+        }
+        if (client) {
+            handle_tcp_msg(p->tcp_fd, client, quic_srv_fd);
+        } else { 
+            fprintf(stdout, "could not find peer to send TCP message from Internet side \n");
+        }
+    }
+}
 
 
 void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
@@ -156,102 +338,6 @@ void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
     load_certificate_chain(server_ctx.tls, cert);
     load_private_key(server_ctx.tls, key);
    
-    return; 
-}
-
-static void process_msg(quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
-{
-    size_t off = 0, i;
-
-    /* split UDP datagram into multiple QUIC packets */
-    while (off < dgram_len) {
-        quicly_decoded_packet_t decoded;
-        if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
-            return;
-        /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
-        for (i = 0; conns[i] != NULL; ++i)
-            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
-                break;
-        if (conns[i] != NULL) {
-            /* let the current connection handle ingress packets */
-            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
-        }
-    }
-}
-
-
-void from_tcp_to_quic(int tcp_fd, int quic_fd, quicly_conn_t *client, quicly_stream_t *stream)
-{
-    uint8_t buf[4096];
-    struct sockaddr_storage sa;
-    socklen_t salen = sizeof(sa);
-    ssize_t rret;
-
-    if ((rret = recvfrom(tcp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&sa, &salen)) == -1) {
-        perror("recvfrom failed");
-        return;
-    }
-
-    if (send_quicly_msg(client, buf, sizeof(buf)) != 0) {
-        perror("quicly_send failed");
-        return;
-    }
-
-    return;
-}
-
-void from_quic_to_tcp(int quic_fd, int tcp_fd, quicly_conn_t *client, quicly_stream_t *stream)
-{
-
-    quicly_conn_t *conns[256] = {client};
-    uint8_t buf[4096];
-    struct sockaddr_storage sa;
-    struct iovec vec = {.iov_base = buf, .iov_len = sizeof(buf)};
-    struct msghdr msg = {.msg_name = &sa, .msg_namelen = sizeof(sa), .msg_iov = &vec, .msg_iovlen = 1};
-    ssize_t rret;
-
-    while ((rret = recvmsg(quic_fd, &msg, 0)) == -1 && errno == EINTR)
-        ;
-
-    if (rret > 0)
-        process_msg(conns, &msg, rret);
-
-    send(tcp_fd, buf, sizeof(buf), 0);
-
-    return;
-}
-
-void run_server_loop(int quic_srv_fd)
-{
-    quicly_conn_t *conns[256] = {NULL}; 
-    quicly_conn_t *client = NULL;
-    quicly_stream_t *stream = NULL;
-
-    int tcp_fd; 
-
-    while (1) {
-        fd_set readfds;
-        FD_ZERO(&readfds); 
-        FD_SET(quic_srv_fd, &readfds);
-        if (tcp_fd > 0) {
-            FD_SET(tcp_fd, &readfds);
-        }
-
-        if (select(tcp_fd > quic_srv_fd ? tcp_fd + 1 : quic_srv_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
-            perror("select failed");
-            break;
-        }
-
-        if (tcp_fd > 0 && FD_ISSET(tcp_fd, &readfds)) {
-            // handle TCP connection 
-            from_tcp_to_quic(tcp_fd, quic_srv_fd, client, stream);
-        }
-
-        if (FD_ISSET(quic_srv_fd, &readfds)) {
-            // handle QUIC connection 
-            from_quic_to_tcp(quic_srv_fd, tcp_fd, client, stream);
-        }
-    }
     return; 
 }
 
@@ -284,7 +370,7 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    printf("QPEP Server is running, pid = %lu, port = %d\n", 
+    printf("QPEP Server is running, pid = %lu, UDP listening port = %d\n", 
             (uint64_t)getpid(), udp_listen_port);
     
     run_server_loop(quic_srv_fd);
@@ -293,3 +379,75 @@ int main(int argc, char **argv)
      
 }  
 
+#if 0 
+void run_server_loop(int quic_srv_fd)
+{
+    quicly_conn_t *conns[256] = {NULL}; 
+    quicly_conn_t *client = NULL;
+    quicly_stream_t *stream = NULL;
+
+    int tcp_fd; 
+
+    while (1) {
+        fd_set readfds;
+        FD_ZERO(&readfds); 
+        FD_SET(quic_srv_fd, &readfds);
+        if (tcp_fd > 0) {
+            FD_SET(tcp_fd, &readfds);
+        }
+
+        if (select(tcp_fd > quic_srv_fd ? tcp_fd + 1 : quic_srv_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+            perror("select failed");
+            break;
+        }
+
+
+        if (tcp_fd > 0 && FD_ISSET(tcp_fd, &readfds)) {
+            // handle TCP connection 
+            from_tcp_to_quic(tcp_fd, quic_srv_fd, client, stream);
+        }
+
+        if (FD_ISSET(quic_srv_fd, &readfds)) {
+            // handle QUIC connection
+            if (client == NULL) {
+                // create a new QUIC connection 
+                client = quicly_accept(&server_ctx, &next_cid, NULL, NULL, NULL);
+                if (client == NULL) {
+                    perror("quicly_accept failed");
+                    goto error;
+                }
+            } 
+            from_quic_to_tcp(quic_srv_fd, tcp_fd, client, stream);
+        }
+    }
+error:
+    close(tcp_fd);
+    close(quic_srv_fd);
+    quicly_free(client);
+    quicly_free(stream);
+    return; 
+}
+
+
+static void process_msg(quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
+{
+    size_t off = 0, i;
+
+    /* split UDP datagram into multiple QUIC packets */
+    while (off < dgram_len) {
+        quicly_decoded_packet_t decoded;
+        if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
+            return;
+       
+        for (i = 0; conns[i] != NULL; ++i)
+            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
+                break;
+        if (conns[i] != NULL) {
+            /* let the current connection handle ingress packets */
+            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
+        }
+    }
+}
+
+
+#endif
