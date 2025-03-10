@@ -319,7 +319,7 @@ int main(int argc, char **argv)
         exit(1);
     } 
 
-    printf("starting client with pid %lu on port %d\n", get_current_pid(), tcp_lst_port);
+    printf("starting client with pid %lu on port %d\n", getpid(), tcp_lst_port);
     run_client_loop(tcp_fd, host, port); 
 
     // TODO: add ing SIGNAL handling here

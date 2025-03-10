@@ -28,13 +28,14 @@ static quicly_cid_plaintext_t next_cid;
 quicly_conn_t **conns = {NULL};
 static size_t num_conns = 0;
 
-typedef struct { 
+struct conn_map_t; 
+typedef struct conn_map_t { 
     quicly_conn_t *conn;
     int tcp_fd; 
-    conn_map *next; 
-} conn_map; 
+    struct conn_map_t *next; 
+} conn_map_t; 
 
-conn_map *conn_map_head = NULL;  
+conn_map_t *conn_map_head = NULL;  
 
 quicly_conn_t **conn = NULL;
 
@@ -116,8 +117,7 @@ static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_s
 #define MSG_DONTWAIT 0x80 
 
 
-
-void handle_tcp_msg(int tcp_fd, quicly_conn_t *client, quicly_stream_t *stream)
+void handle_tcp_msg(int tcp_fd, quicly_conn_t *client)
 {
     uint8_t buf[4096];
     struct sockaddr_storage sa;
@@ -207,7 +207,7 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
 
         // for new connection, the payload its the original destination IP and port 
         struct sockaddr *din = (struct sockaddr *) packet->octets.base; 
-        socklen_t din_len = packet->octets.len; 
+        //socklen_t din_len = packet->octets.len; 
         int tcp_fd = create_tcp_connection(inet_ntoa(((struct sockaddr_in *)din)->sin_addr), 
                             ntohs(((struct sockaddr_in *)din)->sin_port));
 
@@ -217,7 +217,7 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
         }
 
         //TODO: need to implement a hash map to store the connection pair. 
-        conn_map *p = malloc(sizeof(conn_map)); 
+        conn_map_t *p = malloc(sizeof(conn_map_t)); 
         p->tcp_fd = tcp_fd;
         p->conn = conn;
         p->next = conn_map_head;
@@ -229,7 +229,7 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
             fprintf(stderr, "quicly_receive returned %i\n", ret);
             exit(1);
         }
-        conn_map *p = conn_map_head;
+        conn_map_t *p = conn_map_head;
         int tcp_fd = -1; 
         while (p) { 
             if (p->conn == conn) {
@@ -257,7 +257,7 @@ void handle_quicly_msg(int quic_fd)
     ssize_t bytes_received;
 
     while((bytes_received = recvfrom(quic_fd, buf, sizeof(buf), MSG_DONTWAIT, &sa, &salen)) != -1) {
-        fprintf(stdout, "received %d bytes from %s, port: %d \n", 
+        fprintf(stdout, "received %ld bytes from %s, port: %d \n", 
             bytes_received, inet_ntoa(((struct sockaddr_in *)&sa)->sin_addr), ntohs(((struct sockaddr_in *)&sa)->sin_port));
             
         for(ssize_t offset = 0; offset < bytes_received; ) {
@@ -280,7 +280,7 @@ void run_server_loop(int quic_srv_fd)
     while (1) { 
         fd_set readfds;
         int max_fd = quic_srv_fd;
-        conn_map *p = conn_map_head;
+        conn_map_t *p = conn_map_head;
         FD_ZERO(&readfds);
         FD_SET(quic_srv_fd, &readfds); 
 
@@ -301,16 +301,16 @@ void run_server_loop(int quic_srv_fd)
                 
         //if not quic message, then it must be a tcp message from Internet side
         p = conn_map_head;
-        quicly_stream_t *client = NULL;
+        quicly_conn_t *client = NULL;
         while (p) { 
             if (FD_ISSET(p->tcp_fd, &readfds)) {
-                client = p->stream;
+                client = p->conn;
                 break;
             }
             p = p->next;
         }
         if (client) {
-            handle_tcp_msg(p->tcp_fd, client, quic_srv_fd);
+            handle_tcp_msg(p->tcp_fd, client);
         } else { 
             fprintf(stdout, "could not find peer to send TCP message from Internet side \n");
         }
@@ -320,8 +320,6 @@ void run_server_loop(int quic_srv_fd)
 
 void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
 {
-    int ret = 0; 
-
     setup_session_cache(get_tlsctx());
     quicly_amend_ptls_context(get_tlsctx());
     
@@ -353,20 +351,6 @@ int main(int argc, char **argv)
     int quic_srv_fd = create_udp_listener(udp_listen_port); 
     if (quic_srv_fd < 0) {
         fprintf(stderr, "failed to create UDP listener.\n");
-        exit(1);
-    } 
-
-    int reuseaddr = 1;
-    struct sockaddr_storage sa;
-    socklen_t salen;
-    memset(&sa, 0, sizeof(sa));
-    sa.ss_family = AF_INET;
-    ((struct sockaddr_in *)&sa)->sin_port = htons(udp_listen_port);
-    salen = sizeof(struct sockaddr_in);
-
-    setsockopt(quic_srv_fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr));
-    if (bind(quic_srv_fd, (struct sockaddr *)&sa, salen) != 0) {
-        perror("bind(2) failed");
         exit(1);
     }
 
