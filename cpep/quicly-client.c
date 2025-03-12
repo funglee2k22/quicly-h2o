@@ -92,7 +92,7 @@ void from_quic_to_tcp(int quic_fd, int tcp_fd, quicly_conn_t *client, quicly_str
 
 
 /*
- *  thread to handle one set connections, TCP conn and QUIC conn 
+ *  thread to handle one TCP connection and QUIC stream 
  *  @param data the thread data 
  *  @return NULL
  */
@@ -161,7 +161,7 @@ error:
 
     return;
 }
-
+// quicly_connect should be done only once 
 int create_quic_client_stream(quicly_conn_t *client, quicly_stream_t *stream, 
     char *host, struct sockaddr_storage *sa)  
 { 
@@ -213,23 +213,6 @@ int run_client_loop(int listen_fd, char *quic_srv, short quic_port)
     return 0;
 }
 
-#if 0
-static void client_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int err,
-    uint64_t frame_type, const char *reason, size_t reason_len)
-{
-    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
-        fprintf(stderr, "transport close:code=0x%lu ;frame=%lu ;reason=%.*s\n", 
-            QUICLY_ERROR_GET_ERROR_CODE(err), frame_type, (int)reason_len, reason);
-    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
-        fprintf(stderr, "application close:code=0x%lu ;reason=%.*s\n", 
-            QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len, reason);
-    } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
-        fprintf(stderr, "stateless reset\n");
-    } else {
-        fprintf(stderr, "unexpected close:code=%d\n", err);
-    }
-}
-#endif
 
 static void client_on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
@@ -327,3 +310,21 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
+#if 0
+static void client_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int err,
+    uint64_t frame_type, const char *reason, size_t reason_len)
+{
+    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+        fprintf(stderr, "transport close:code=0x%lu ;frame=%lu ;reason=%.*s\n", 
+            QUICLY_ERROR_GET_ERROR_CODE(err), frame_type, (int)reason_len, reason);
+    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
+        fprintf(stderr, "application close:code=0x%lu ;reason=%.*s\n", 
+            QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len, reason);
+    } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
+        fprintf(stderr, "stateless reset\n");
+    } else {
+        fprintf(stderr, "unexpected close:code=%d\n", err);
+    }
+}
+#endif

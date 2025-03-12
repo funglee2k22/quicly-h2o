@@ -13,24 +13,27 @@ typedef struct {
     struct sockaddr_storage addr;
 } pep_header_t;
 
+typedef struct conn_stream_pair { 
+    int fd;
+    quicly_stream_t *stream;
+} conn_stream_pair_t;
 
-int get_original_dest_addr(int fd, struct sockaddr_storage *sa);
+struct conn_stream_pair_node;
+typedef struct conn_stream_pair_node { 
+    int fd;
+    quicly_stream_t *stream;
+    struct conn_stream_pair_node *next;
+} conn_stream_pair_node_t;
 
-ptls_context_t *get_tlsctx(); 
-
-int create_udp_listener(short port);
-int create_udp_client_socket(char *hostname, short port, struct sockaddr_storage *sa, socklen_t *salen);
+typedef struct pthread_work { 
+    int tcp_fd;
+    int quic_fd;
+    quicly_stream_t *stream; 
+} worker_data_t; 
 
 int create_tcp_listener(short port);
-int create_tcp_client_socket(char *hostname, short port, struct sockaddr_storage *sa, socklen_t *salen);
-
-
-int create_quic_client_stream(quicly_conn_t *client, quicly_stream_t *stream, char *host, struct sockaddr_storage *sa);
-int create_quic_server_stream(quicly_conn_t *server, quicly_stream_t *stream, struct sockaddr_storage *sa);
-
-int send_quicly_msg(quicly_conn_t *conn, const void *data, size_t len);
 
 
 
-
+bool send_dgrams_default(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num_dgrams);
 

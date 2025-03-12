@@ -11,6 +11,33 @@
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
 
+typedef struct
+{
+    uint64_t target_offset;
+    uint64_t acked_offset;
+    quicly_stream_t *stream;
+    int report_id;
+    int report_second;
+    uint64_t report_num_packets_sent;
+    uint64_t report_num_packets_lost;
+    uint64_t total_num_packets_sent;
+    uint64_t total_num_packets_lost;
+    //ev_timer report_timer; 
+} server_stream;
+
+ptls_context_t *get_tlsctx()
+{
+    static ptls_context_t tlsctx = {
+        .random_bytes = ptls_openssl_random_bytes,
+        .get_time = &ptls_get_time,
+        .key_exchanges = ptls_openssl_key_exchanges,
+        .cipher_suites = ptls_openssl_cipher_suites,
+        .require_dhe_on_psk = 1
+    };
+
+    return &tlsctx;
+}
+
 int create_tcp_listener(short port)
 { 
     int fd;
@@ -26,12 +53,11 @@ int create_tcp_listener(short port)
         return -1;
     }
 
-#ifdef IP_TRANSPARENT
+
     if (setsockopt(fd, SOL_IP, IP_TRANSPARENT, &(int){1}, sizeof(int)) != 0) {
         perror("setsockopt(IP_TRANSPARENT) failed");
         return -1;
     }
-#endif
     
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
@@ -80,40 +106,52 @@ int create_udp_listener(short port)
     return fd;
 }
 
-int create_udp_client_socket(char *hostname, short port)
+
+int create_udp_client_socket(char *hostname, short port, struct sockaddr_storage *sa, socklen_t *salen) 
 {
-    int fd;
-    struct sockaddr_in sa;
-    struct hostent *hp;
+    int fd = -1;
+    struct sockaddr_in local;
+    char str_port[10] = {0};
+    snprintf(str_port, sizeof(str_port), "%d", port);
 
-    if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
-        perror("socket failed");
+    if (resolve_address((struct sockaddr *)sa, salen, hostname, str_port, AF_INET, SOCK_DGRAM, 0) != 0)
+        return -1;
+
+    if ((fd = socket(sa->ss_family, SOCK_DGRAM, 0)) == -1) {
+        perror("socket(2) failed");
         return -1;
     }
-
-    if ((hp = gethostbyname(hostname)) == NULL) {
-        perror("gethostbyname failed");
-        return -1;
-    }
-
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(port);
-    memcpy(&sa.sin_addr, hp->h_addr, hp->h_length);
-
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
-        perror("connect failed");
+    
+    memset(&local, 0, sizeof(local)); 
+    if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
+        perror("bind(2) failed");
         return -1;
     }
 
     return fd;
 }
 
+
+int send_quicly_msg(quicly_conn_t *conn, const void *data, size_t len)
+{
+    if (!quicly_connection_is_ready(conn)) { 
+        fprintf(stderr, "quicly connection is not ready\n");
+        return -1;
+    } 
+    
+    ptls_iovec_t datagram = ptls_iovec_init(data, len);
+    quicly_send_datagram_frames(conn, &datagram, 1);
+
+    fprintf(stdout, "sent QUIC message of size: %ld\n", len);        
+    return 0;
+}
+
 int get_original_dest_addr(int fd, struct sockaddr_storage *sa)
 {
     socklen_t salen = sizeof(*sa);
 
-#ifdef SO_ORIGINAL_DST  
+#ifndef SO_ORIGINAL_DST 
+#define SO_ORIGINAL_DST 80 
     if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, sa, &salen) != 0) {
         perror("getsockopt(SO_ORIGINAL_DST) failed");
         return -1;
@@ -122,26 +160,3 @@ int get_original_dest_addr(int fd, struct sockaddr_storage *sa)
     return 0;
 }
 
-
-
-
-
-bool send_dgrams_default(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num_dgrams)
-{
-    for(size_t i = 0; i < num_dgrams; ++i) {
-        struct msghdr mess = {
-            .msg_name = dest,
-            .msg_namelen = quicly_get_socklen(dest),
-            .msg_iov = &dgrams[i], .msg_iovlen = 1
-        };
-
-        ssize_t bytes_sent;
-        while ((bytes_sent = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR);
-        if (bytes_sent == -1) {
-            perror("sendmsg failed");
-            return false;
-        }
-    }
-
-    return true;
-}
