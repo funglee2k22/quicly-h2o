@@ -127,6 +127,52 @@ int create_quic_conn(char *srv, short port, quicly_conn_t *conn)
     return 0;
 }
 
+bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num_dgrams)
+{       
+    for(size_t i = 0; i < num_dgrams; ++i) {
+        struct msghdr mess = {
+            .msg_name = dest,
+            .msg_namelen = quicly_get_socklen(dest),
+            .msg_iov = &dgrams[i], .msg_iovlen = 1
+        };  
+            
+        ssize_t bytes_sent;
+        while ((bytes_sent = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR);
+        if (bytes_sent == -1) {
+            perror("sendmsg failed");
+            return false;
+        }   
+    }   
+    
+    return true;
+}       
+
+int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
+{ 
+    quicly_streambuf_egress_write(stream, buf, len); 
+    
+    #define SEND_BATCH_SIZE 16
+    quicly_address_t src, dst;
+    struct iovec dgrams[SEND_BATCH_SIZE];
+    size_t num_dgrams;
+    uint8_t dgrams_buf[SEND_BATCH_SIZE * client_ctx.transport_params.max_udp_payload_size];
+    size_t num_dgrams = SEND_BATCH_SIZE;
+
+    int quicly_res = quicly_send(stream->conn, &dst, &src, dgrams, &num_dgrams, &dgrams_buf, sizeof(dgrams_buf)); 
+    if (quicly_res != 0) { 
+        quicly_debug_printf(stream->conn, "quicly_send failed with res: %d.\n", quicly_res);
+        return -1; 
+    } else if (num_dgrams == 0) { 
+        quicly_debug_printf(stream->conn, "quicly_send() nothing to send.");
+        return 0;
+    }
+
+    if (!send_dgrams(quic_fd, &dst.sa, dgrams, num_dgrams)) { 
+        return -1;
+    }
+    return 0;
+}
+
 void *handle_client(void *data)
 {   
     quicly_stream_t *quic_stream = ((worker_data_t *) data)->stream;
@@ -144,8 +190,45 @@ void *handle_client(void *data)
 #endif
 
     //send the original destination address to QUIC server 
-    quicly_send(quic);
+    if (quicly_send_msg(quic_fd, quic_stream, (void *)&orig_dst, len) != 0) { 
+        quicly_debug_printf(quic_stream->conn, "sending original connection header failed.\n");
+        return NULL;
+    }
 
+    /* the following code only handle from tcp to quic 
+     * the quic to tcp is handled in client_on_receive() 
+     */
+    while (1) { 
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(tcp_fd, &readfds);
+        
+        if (select(tcp_fd, &readfds, NULL, NULL, NULL) == -1) {
+            perror("select failed");
+                goto error;
+            }    
+        if (FD_ISSET(tcp_fd, &readfds)) {
+            char buff[4096];
+            int bytes_received = read(tcp_fd, buff, sizeof(buff)); 
+            if (bytes_received < 0) { 
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %d] tcp side error.\n", tcp_fd, quic_stream->stream_id);
+                goto error;
+            }
+
+            int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
+            if (!ret) { 
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %d] failed to send to quic stream.", 
+                    tcp_fd, quic_stream->stream_id);
+                goto error;
+            }
+        }
+
+    }
+
+error:
+    close(tcp_fd);
+    //TODO close QUIC stream also 
+    return;
 }
 
 
