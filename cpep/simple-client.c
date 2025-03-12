@@ -43,7 +43,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* obtain contiguous bytes from the receive buffer */
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
     
-    quicly_debug_printf(stream->conn, "stream: %d received %zu bytes\n", stream->stream_id, input.len);
+    quicly_debug_printf(stream->conn, "stream: %ld received %zu bytes\n", stream->stream_id, input.len);
     
     //TODO write code to send data to tcp side. 
 #if 0
@@ -63,14 +63,14 @@ static void client_on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
     fprintf(stderr, "received STOP_SENDING: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
-    quicly_debug_printf(stream->conn, "stream: %d received STOP_SENDING, and called quicly_close()\n", stream->stream_id);
+    quicly_debug_printf(stream->conn, "stream: %ld received STOP_SENDING, and called quicly_close()\n", stream->stream_id);
 }
 
 static void client_on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     fprintf(stderr, "received RESET_STREAM: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
-    quicly_debug_printf(stream->conn, "stream: %d received reset_stream, and called quicly_close()\n", stream->stream_id);
+    quicly_debug_printf(stream->conn, "stream: %ld received reset_stream, and called quicly_close()\n", stream->stream_id);
 }
 
 
@@ -90,7 +90,7 @@ static quicly_error_t client_on_stream_open(quicly_stream_open_t *self, quicly_s
         return ret;
     stream->callbacks = &stream_callbacks;
     
-    quicly_debug_printf(stream->conn, "stream: %d opened\n", stream->stream_id);
+    quicly_debug_printf(stream->conn, "stream: %ld opened\n", stream->stream_id);
     return 0;
 }
  
@@ -154,14 +154,13 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
 {  
     struct sockaddr_in tcp_remote_addr;
     socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
-    pid_t pid;
     
     while (1) { 
         int client_fd = accept(tcp_fd, (struct sockaddr *)&tcp_remote_addr, &tcp_addr_len);
         if (client_fd < 0) {
             fprintf(stderr, "TCP accept failed.\n");
             close(tcp_fd);
-            return -1;
+            return;
         }
         quicly_stream_t *nstream = NULL; 
         if (quicly_open_stream(quic, &nstream, 0) != 0) {
@@ -202,7 +201,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    fprintf(stdout, "starting PEP ISP with pid %lu on port %d\n", getpid(), tcp_lstn_port);
+    fprintf(stdout, "starting PEP ISP with pid %d on port %d\n", getpid(), tcp_lstn_port);
 
     int quic_fd = create_udp_client_socket(srv, srv_port);
     if (quic_fd < 0) {
@@ -227,7 +226,7 @@ int main(int argc, char **argv)
     }
     
     //TODO: adding a control thread to send ping-pong  
-    runloop(tcp_fd, quic_fd, conn); 
+    run_loop(tcp_fd, quic_fd, conn); 
     
     return 0; 
 }
