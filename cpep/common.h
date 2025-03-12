@@ -31,6 +31,9 @@ typedef struct pthread_work {
     quicly_stream_t *stream; 
 } worker_data_t; 
 
+
+ptls_context_t *get_tlsctx();
+
 int create_tcp_listener(short port);
 
 int create_udp_client_socket(char *hostname, short port);

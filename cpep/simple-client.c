@@ -23,10 +23,11 @@
 #include "common.h"
 #include <picotls/../../t/util.h> 
 
+#define debug_ok();  fprintf(stdout, "func %s, line %d, we are good here.\n", __func__, __LINE__);
+
 static quicly_context_t client_ctx;
 static quicly_cid_plaintext_t next_cid;
 static ptls_iovec_t resumption_token; 
-
 
 static quicly_error_t client_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
 static quicly_stream_open_t stream_open = {client_on_stream_open};
@@ -102,28 +103,35 @@ void setup_client_ctx()
     client_ctx = quicly_spec_context;
     client_ctx.tls = get_tlsctx();
     client_ctx.stream_open = &stream_open;
+    client_ctx.transport_params.max_stream_data.uni = UINT32_MAX;
+    client_ctx.transport_params.max_stream_data.bidi_local = UINT32_MAX;
+    client_ctx.transport_params.max_stream_data.bidi_remote = UINT32_MAX;
     //client_ctx.init_cc = &quicly_cc_cubic_init;
 
     return; 
 }
 
-int create_quic_conn(char *srv, short port, quicly_conn_t *conn)
+int create_quic_conn(char *srv, short port, quicly_conn_t **conn)
 { 
-    struct sockaddr_storage sas;
-    socklen_t salen; 
-    char str_port[10];
-    itoa(port, str_port, 10);
+    struct sockaddr_in sa;
+    struct hostent *hp;
 
-    if(resolve_address((void*)&sas, &salen, srv, str_port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0) {
-        exit(-1);
+    if ((hp = gethostbyname(srv)) == NULL) {
+        fprintf(stderr, "func: %s, line: %d, gethostbyname failed\n", __func__, __LINE__);
+        return -1;
     }
 
-    if (quicly_connect(conn, &client_ctx, srv, (struct sockaddr *)&sas, NULL, &next_cid, resumption_token, NULL, NULL, NULL) != 0) {
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    memcpy(&sa.sin_addr, hp->h_addr, hp->h_length);
+   
+    if (quicly_connect(conn, &client_ctx, srv, (struct sockaddr *)&sa, NULL, &next_cid, resumption_token, NULL, NULL, NULL) != 0) {
         fprintf(stderr, "quicly_connect failed\n");
         return -1;
     }
 
-    quicly_debug_printf(conn, "quicly_connect() successful\n");
+    quicly_debug_printf(*conn, "quicly_connect() successful\n");
     return 0;
 }
 
@@ -154,7 +162,6 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
     #define SEND_BATCH_SIZE 16
     quicly_address_t src, dst;
     struct iovec dgrams[SEND_BATCH_SIZE];
-    size_t num_dgrams;
     uint8_t dgrams_buf[SEND_BATCH_SIZE * client_ctx.transport_params.max_udp_payload_size];
     size_t num_dgrams = SEND_BATCH_SIZE;
 
@@ -185,14 +192,14 @@ void *handle_client(void *data)
 #ifdef SO_ORIGINAL_DST 
     if (getsockopt(tcp_fd, SOL_IP, SO_ORIGINAL_DST, &orig_dst, &len) != 0) {
         fprintf(stderr, "failed to get original destination address\n");
-        return NULL;
+        goto error;
     }
 #endif
 
     //send the original destination address to QUIC server 
     if (quicly_send_msg(quic_fd, quic_stream, (void *)&orig_dst, len) != 0) { 
         quicly_debug_printf(quic_stream->conn, "sending original connection header failed.\n");
-        return NULL;
+        goto error;
     }
 
     /* the following code only handle from tcp to quic 
@@ -211,13 +218,13 @@ void *handle_client(void *data)
             char buff[4096];
             int bytes_received = read(tcp_fd, buff, sizeof(buff)); 
             if (bytes_received < 0) { 
-                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %d] tcp side error.\n", tcp_fd, quic_stream->stream_id);
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
             }
 
             int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
             if (!ret) { 
-                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %d] failed to send to quic stream.", 
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %ld] failed to send to quic stream.", 
                     tcp_fd, quic_stream->stream_id);
                 goto error;
             }
@@ -228,7 +235,7 @@ void *handle_client(void *data)
 error:
     close(tcp_fd);
     //TODO close QUIC stream also 
-    return;
+    return NULL;
 }
 
 
@@ -284,7 +291,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    fprintf(stdout, "starting PEP ISP with pid %d on port %d\n", getpid(), tcp_lstn_port);
+    fprintf(stdout, "starting PEP-CPE with pid %d on TCP port %d\n", getpid(), tcp_lstn_port);
 
     int quic_fd = create_udp_client_socket(srv, srv_port);
     if (quic_fd < 0) {
@@ -295,19 +302,19 @@ int main(int argc, char **argv)
     int ret = 0;
     quicly_conn_t *conn = NULL; 
     fprintf(stdout, "creating quic connection...\n");
-    ret = create_quic_conn(srv, srv_port, conn); 
+    ret = create_quic_conn(srv, srv_port, &conn); 
     if (ret < 0) { 
         fprintf(stderr, "failed to create quic connection\n");
         return -1;
     }
 
-    fprintf(stdout, "creating ctrl stream...\n");
     quicly_stream_t *ctrl_stream = NULL; 
     if ((ret = quicly_open_stream(conn, &ctrl_stream, 0)) != 0) { 
         fprintf(stderr, "quicly_open_stream() failed:%d\n", ret);
         return -1;
     }
     
+    debug_ok();
     //TODO: adding a control thread to send ping-pong  
     run_loop(tcp_fd, quic_fd, conn); 
     

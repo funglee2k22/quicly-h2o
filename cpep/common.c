@@ -11,6 +11,18 @@
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
 
+ptls_context_t *get_tlsctx()
+{
+    static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
+                                    .get_time = &ptls_get_time,
+                                    .key_exchanges = ptls_openssl_key_exchanges,
+                                    .cipher_suites = ptls_openssl_cipher_suites,
+                                    .require_dhe_on_psk = 1};
+    return &tlsctx;
+}
+
+
+
 int create_tcp_listener(short port)
 { 
     int fd;
