@@ -104,32 +104,12 @@ static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_s
 
     stream->callbacks = &stream_callbacks;
 
-    quicly_debug_printf(stream->conn, "stream: %d is openned.", stream->stream_id);
+    quicly_debug_printf(stream->conn, "stream: %ld is openned.", stream->stream_id);
 
     return ret;
 }
 
 #define MSG_DONTWAIT 0x80 
-
-void handle_tcp_msg(int tcp_fd, quicly_conn_t *client)
-{
-    uint8_t buf[4096];
-    struct sockaddr_storage sa;
-    socklen_t salen = sizeof(sa);
-    ssize_t rret;
-
-    if ((rret = recvfrom(tcp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&sa, &salen)) == -1) {
-        perror("recvfrom failed");
-        return;
-    }
-
-    if (send_quicly_msg(client, buf, sizeof(buf)) != 0) {
-        perror("quicly_send failed");
-        return;
-    }
-
-    return;
-}
 
 static quicly_conn_t *find_conn(struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *packet)
 {
@@ -293,7 +273,7 @@ void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
 int main(int argc, char **argv)
 {
     char *host = "127.0.0.1";     //quic server address 
-    short udp_listen_port = 8443;   //port is quic server listening UDP port 
+    short udp_listen_port = 4443;   //port is quic server listening UDP port 
     char *cert_path = "server.crt";
     char *key_path = "server.key";
 
@@ -313,76 +293,3 @@ int main(int argc, char **argv)
     return 0;
      
 }  
-
-#if 0 
-void run_server_loop(int quic_srv_fd)
-{
-    quicly_conn_t *conns[256] = {NULL}; 
-    quicly_conn_t *client = NULL;
-    quicly_stream_t *stream = NULL;
-
-    int tcp_fd; 
-
-    while (1) {
-        fd_set readfds;
-        FD_ZERO(&readfds); 
-        FD_SET(quic_srv_fd, &readfds);
-        if (tcp_fd > 0) {
-            FD_SET(tcp_fd, &readfds);
-        }
-
-        if (select(tcp_fd > quic_srv_fd ? tcp_fd + 1 : quic_srv_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
-            perror("select failed");
-            break;
-        }
-
-
-        if (tcp_fd > 0 && FD_ISSET(tcp_fd, &readfds)) {
-            // handle TCP connection 
-            from_tcp_to_quic(tcp_fd, quic_srv_fd, client, stream);
-        }
-
-        if (FD_ISSET(quic_srv_fd, &readfds)) {
-            // handle QUIC connection
-            if (client == NULL) {
-                // create a new QUIC connection 
-                client = quicly_accept(&server_ctx, &next_cid, NULL, NULL, NULL);
-                if (client == NULL) {
-                    perror("quicly_accept failed");
-                    goto error;
-                }
-            } 
-            from_quic_to_tcp(quic_srv_fd, tcp_fd, client, stream);
-        }
-    }
-error:
-    close(tcp_fd);
-    close(quic_srv_fd);
-    quicly_free(client);
-    quicly_free(stream);
-    return; 
-}
-
-
-static void process_msg(quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
-{
-    size_t off = 0, i;
-
-    /* split UDP datagram into multiple QUIC packets */
-    while (off < dgram_len) {
-        quicly_decoded_packet_t decoded;
-        if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
-            return;
-       
-        for (i = 0; conns[i] != NULL; ++i)
-            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
-                break;
-        if (conns[i] != NULL) {
-            /* let the current connection handle ingress packets */
-            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
-        }
-    }
-}
-
-
-#endif

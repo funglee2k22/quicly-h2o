@@ -40,27 +40,27 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* read input to receive buffer */
     if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
-
+    debug_ok();
     /* obtain contiguous bytes from the receive buffer */
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
-    quicly_debug_printf(stream->conn, "stream: %ld received %zu bytes", stream->stream_id, input.len);
+    quicly_debug_printf(stream->conn, "stream: %ld received %zu bytes\n", stream->stream_id, input.len);
    
     char buff[4096];
     memcpy(buff, input.base, len);
     int tcp_fd = find_tcp_conn(&mmap_head, stream);
 
     if (tcp_fd < 0) { 
-        quicly_debug_printf(stream->conn, "stream: %ld, could not find tcp_sk to write", stream->stream_id);
+        quicly_debug_printf(stream->conn, "stream: %ld, could not find tcp_sk to write\n", stream->stream_id);
         return;
     }
 
     size_t bytes_sent = send(tcp_fd, buff, len, 0);    
     if (bytes_sent == -1) { 
-        quicly_debug_printf(stream->conn, "stream: %ld -> tcp: %d, tcp send() failed", stream->stream_id, tcp_fd);
+        quicly_debug_printf(stream->conn, "stream: %ld -> tcp: %d, tcp send() failed\n", stream->stream_id, tcp_fd);
         return;
     }
 
-    quicly_debug_printf(stream->conn, "stream: %ld -> tcp: %d, bytes: %d sent", stream->stream_id, tcp_fd, bytes_sent);
+    quicly_debug_printf(stream->conn, "stream: %ld -> tcp: %d, bytes: %d sent\n", stream->stream_id, tcp_fd, bytes_sent);
 
 
     /* initiate connection close after receiving all data */
@@ -183,13 +183,14 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
         quicly_debug_printf(stream->conn, "quicly_send failed with res: %d.\n", quicly_res);
         return -1; 
     } else if (num_dgrams == 0) { 
-        quicly_debug_printf(stream->conn, "quicly_send() nothing to send.");
+        quicly_debug_printf(stream->conn, "quicly_send() nothing to send.\n");
         return 0;
     }
 
     if (!send_dgrams(quic_fd, &dst.sa, dgrams, num_dgrams)) { 
         return -1;
     }
+    debug_ok();
     return 0;
 }
 
@@ -231,16 +232,16 @@ void *handle_client(void *data)
             char buff[4096];
             int bytes_received = read(tcp_fd, buff, sizeof(buff)); 
             if (bytes_received < 0) { 
-                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
             } 
             
-	        fprintf(stdout, "[tcp: %d, stream: %ld] tcp read %d bytes.\n", 
-			    tcp_fd, quic_stream->stream_id, bytes_received);
+	    fprintf(stdout, "[tcp: %d -> stream: %ld] tcp read %d bytes.\n", 
+		    tcp_fd, quic_stream->stream_id, bytes_received);
 	  
             int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
             if (!ret) { 
-                quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %ld] failed to send to quic stream.", 
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
                     tcp_fd, quic_stream->stream_id);
                 goto error;
             }
@@ -331,8 +332,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "quicly_open_stream() failed:%d\n", ret);
         return -1;
     }
+
     
-    debug_ok();
+    
+    
     //TODO: adding a control thread to send ping-pong  
     run_loop(tcp_fd, quic_fd, conn); 
     
