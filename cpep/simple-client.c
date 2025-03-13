@@ -242,7 +242,8 @@ void *handle_client(void *data)
             if (!ret) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %ld] failed to send to quic stream.", 
                     tcp_fd, quic_stream->stream_id);
-                goto error;
+                continue; //do not close socket for debugging purpose. 
+                //goto error; 
             }
         }
 
@@ -289,7 +290,7 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_client, (void *)data);
 	
-	fprintf(stdout, "func: %s, line: %d, worker: %p.\n", __func__, __LINE__, worker_thread);
+	    fprintf(stdout, "func: %s, line: %d, worker: %p.\n", __func__, __LINE__, worker_thread);
     }
 
     return;

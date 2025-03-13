@@ -30,6 +30,8 @@ static size_t num_conns = 0;
 
 quicly_conn_t **conn = NULL;
 
+conn_stream_pair_node_t mmap_head; 
+
 static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
 static void server_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn,
 	  int err, uint64_t frame_type, const char *reason, size_t reason_len);
@@ -51,6 +53,8 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
 
     /* obtain contiguous bytes from the receive buffer */
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
+
+    int tcp_fd = find_tcp_conn(mmap_head.next, stream); 
 
     if (quicly_sendstate_is_open(&stream->sendstate) && (input.len > 0)) {
         quicly_streambuf_egress_write(stream, input.base, input.len);
@@ -190,6 +194,7 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
 
     if(conn == NULL) {
         //new connect 
+        quicly_debug_printf(NULL, "got a new connection.\n");
         int ret = quicly_accept(&conn, &server_ctx, 0, sa, packet, NULL, &next_cid, NULL, NULL);
         if(ret != 0) {
             fprintf(stderr, "quicly_accept failed with code %i\n", ret);
@@ -197,7 +202,6 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
         }
 
         ++next_cid.master_id;
-        fprintf(stdout, "got new connection \n");
         append_conn(conn); 
 
         if (packet->octets.len == 0) { 
@@ -212,9 +216,18 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
 
         if (tcp_fd < 0) {
             fprintf(stderr, "failed to create TCP connection.\n");
+            //exit(1);
+        }
+    } else {
+        
+        int ret = quicly_receive(conn, NULL, sa, packet);
+        if(ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
+            fprintf(stderr, "quicly_receive returned %i\n", ret);
             exit(1);
         }
+        quicly_debug_printf(conn, "quicly receive a packet %d bytes\n", packet->octets.len);
     }
+
     return;
 }
 
@@ -258,6 +271,8 @@ void run_server_loop(int quic_srv_fd)
             break;
         }
 
+        debug_ok();
+
         if (FD_ISSET(quic_srv_fd, &readfds)) {
             handle_quicly_msg(quic_srv_fd);   
         }        
@@ -293,7 +308,7 @@ void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
 int main(int argc, char **argv)
 {
     char *host = "127.0.0.1";     //quic server address 
-    short udp_listen_port = 8443;   //port is quic server listening UDP port 
+    short udp_listen_port = 4443;   //port is quic server listening UDP port 
     char *cert_path = "server.crt";
     char *key_path = "server.key";
 
