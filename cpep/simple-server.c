@@ -247,11 +247,11 @@ void run_server_loop(int quic_srv_fd)
         FD_SET(quic_srv_fd, &readfds); 
 
         if (select(quic_srv_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
-            fprintf(stderr, "func: %s, line: %d, select() error on UDP server socket %d", __func__, __LINE__, quic_srv_fd);
+            fprintf(stderr, "func: %s, line: %d, select() error on UDP server socket %d\n", __func__, __LINE__, quic_srv_fd);
             break;
         }
-
-        debug_ok();
+	
+	fprintf(stderr, "func: %s, line: %d, select()ed on UDP socket %d\n", __func__, __LINE__, quic_srv_fd);
 
         if (FD_ISSET(quic_srv_fd, &readfds)) {
             handle_quicly_msg(quic_srv_fd);   
@@ -288,7 +288,7 @@ void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
 int main(int argc, char **argv)
 {
     char *host = "127.0.0.1";     //quic server address 
-    short udp_listen_port = 4443;   //port is quic server listening UDP port 
+    short udp_listen_port = 4433;   //port is quic server listening UDP port 
     char *cert_path = "server.crt";
     char *key_path = "server.key";
 
@@ -300,8 +300,8 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    printf("QPEP Server is running, pid = %lu, UDP listening port = %d\n", 
-            (uint64_t)getpid(), udp_listen_port);
+    printf("QPEP Server is running, pid: %lu, UDP listening port: %d, sk_fd: %d\n", 
+            (uint64_t)getpid(), udp_listen_port, quic_srv_fd);
     
     run_server_loop(quic_srv_fd);
 
