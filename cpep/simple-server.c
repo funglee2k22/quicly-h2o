@@ -47,6 +47,7 @@ static void server_on_stop_sending(quicly_stream_t *stream, int err)
 
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
+    printf("func: %s, line: %d, entering\n", __func__, __LINE__); 
     /* read input to receive buffer */
     if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
@@ -202,15 +203,15 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
             //exit(1);
         }
 #endif
-    } else {
-         
+    } else { 
         int ret = quicly_receive(conn, NULL, sa, packet);
         if(ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
-            fprintf(stderr, "quicly_receive returned %i\n", ret);
-            exit(1);
+             fprintf(stderr, "quicly_receive returned %i\n", ret);
+             exit(1);
         }
-        quicly_debug_printf(conn, "quicly receive a packet %d bytes\n", packet->octets.len);
     }
+
+    quicly_debug_printf(conn, "quicly receive a packet %d bytes\n", packet->octets.len);
 
     return;
 }
@@ -245,12 +246,19 @@ void run_server_loop(int quic_srv_fd)
 {
     fprintf(stdout, "starting server loop...\n"); 
     
-    while (1) { 
+
+    while (1) {
+        struct timeval tv;
+        tv.tv_sec = 10;
+        tv.tv_usec = 0;
+	
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(quic_srv_fd, &readfds); 
 
-        if (select(quic_srv_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+        fprintf(stdout, "select is blocking ?\n");
+
+        if (select(quic_srv_fd + 1, &readfds, NULL, NULL, &tv) == -1) {
             fprintf(stderr, "func: %s, line: %d, select() error on UDP server socket %d\n", __func__, __LINE__, quic_srv_fd);
             break;
         }
