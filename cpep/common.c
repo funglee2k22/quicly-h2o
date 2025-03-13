@@ -31,7 +31,7 @@ void __debug_printf(quicly_conn_t *conn, const char *function, int line, const c
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    fprintf("quicly_conn: %p, func: %s, line: %d, %s", conn, function, line, buf);
+    fprintf(stdout, "quicly_conn: %p, func: %s, line: %d, %s", conn, function, line, buf);
     return;
 
 }

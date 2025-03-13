@@ -34,16 +34,6 @@ static quicly_stream_open_t stream_open = {client_on_stream_open};
 
 conn_stream_pair_node_t mmap_head; 
 
-int find_tcp_conn(conn_stream_pair_node_t *head, quicly_stream_t *stream)
-{ 
-    conn_stream_pair_node_t *p = head; 
-    while (p) { 
-        if (p->stream == stream)
-            return p->fd;
-    }
-    return -1;
-}
-
 
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
@@ -56,7 +46,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     quicly_debug_printf(stream->conn, "stream: %ld received %zu bytes", stream->stream_id, input.len);
    
     char buff[4096];
-    memncpy(buff, 4096, input.base, len);
+    memcpy(buff, input.base, len);
     int tcp_fd = find_tcp_conn(&mmap_head, stream);
 
     if (tcp_fd < 0) { 
