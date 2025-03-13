@@ -28,15 +28,6 @@ static quicly_cid_plaintext_t next_cid;
 quicly_conn_t **conns = {NULL};
 static size_t num_conns = 0;
 
-struct conn_map_t; 
-typedef struct conn_map_t { 
-    quicly_conn_t *conn;
-    int tcp_fd; 
-    struct conn_map_t *next; 
-} conn_map_t; 
-
-conn_map_t *conn_map_head = NULL;  
-
 quicly_conn_t **conn = NULL;
 
 static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
@@ -110,12 +101,15 @@ static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_s
 
     if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0)
         return ret;
+
     stream->callbacks = &stream_callbacks;
-    return 0;
+
+    quicly_debug_printf(stream->conn, "stream: %d is openned.", stream->stream_id);
+
+    return ret;
 }
 
 #define MSG_DONTWAIT 0x80 
-
 
 void handle_tcp_msg(int tcp_fd, quicly_conn_t *client)
 {
@@ -201,9 +195,14 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
             fprintf(stderr, "quicly_accept failed with code %i\n", ret);
             return;
         }
+
         ++next_cid.master_id;
         fprintf(stdout, "got new connection \n");
         append_conn(conn); 
+
+        if (packet->octets.len == 0) { 
+            quicly_debug_printf(conn, "packet has zero length.\n");
+        }
 
         // for new connection, the payload its the original destination IP and port 
         struct sockaddr *din = (struct sockaddr *) packet->octets.base; 
@@ -215,36 +214,8 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
             fprintf(stderr, "failed to create TCP connection.\n");
             exit(1);
         }
-
-        //TODO: need to implement a hash map to store the connection pair. 
-        conn_map_t *p = malloc(sizeof(conn_map_t)); 
-        p->tcp_fd = tcp_fd;
-        p->conn = conn;
-        p->next = conn_map_head;
-        conn_map_head = p; 
-    
-    } else {
-        int ret = quicly_receive(conn, NULL, sa, packet);
-        if(ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
-            fprintf(stderr, "quicly_receive returned %i\n", ret);
-            exit(1);
-        }
-        conn_map_t *p = conn_map_head;
-        int tcp_fd = -1; 
-        while (p) { 
-            if (p->conn == conn) {
-                tcp_fd = p->tcp_fd;
-                break;
-            }
-            p = p->next;
-        } 
-        if (tcp_fd > 0) {
-            int ssize = send(tcp_fd, packet->octets.base, packet->octets.len, 0);
-            fprintf(stdout, "send %d bytes through tcp fd %d\n", ssize, tcp_fd); 
-        } else {
-            fprintf(stdout, "could not find TCP Peer to send QUIC message \n");
-        }
     }
+    return;
 }
 
 
@@ -265,7 +236,6 @@ void handle_quicly_msg(int quic_fd)
             if(packet_len == SIZE_MAX) {
                 break;
             }
-
             handle_quicly_packet(&packet, &sa, salen);
         }
     }
@@ -280,19 +250,11 @@ void run_server_loop(int quic_srv_fd)
     
     while (1) { 
         fd_set readfds;
-        int max_fd = quic_srv_fd;
-        conn_map_t *p = conn_map_head;
         FD_ZERO(&readfds);
         FD_SET(quic_srv_fd, &readfds); 
 
-        while (p) { 
-            FD_SET(p->tcp_fd, &readfds);
-            max_fd = (max_fd > p->tcp_fd) ? max_fd : p->tcp_fd;
-            p = p->next;
-        } 
-
-        if (select(max_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
-            perror("select failed");
+        if (select(quic_srv_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+            fprintf(stderr, "func: %s, line: %d, select() error on UDP server socket %d", __func__, __LINE__, quic_srv_fd);
             break;
         }
 
@@ -300,22 +262,10 @@ void run_server_loop(int quic_srv_fd)
             handle_quicly_msg(quic_srv_fd);   
         }        
                 
-        //if not quic message, then it must be a tcp message from Internet side
-        p = conn_map_head;
-        quicly_conn_t *client = NULL;
-        while (p) { 
-            if (FD_ISSET(p->tcp_fd, &readfds)) {
-                client = p->conn;
-                break;
-            }
-            p = p->next;
-        }
-        if (client) {
-            handle_tcp_msg(p->tcp_fd, client);
-        } else { 
-            fprintf(stdout, "could not find peer to send TCP message from Internet side \n");
-        }
     }
+error:
+    close(quic_srv_fd);
+
 }
 
 
