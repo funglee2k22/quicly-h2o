@@ -195,7 +195,7 @@ void *handle_client(void *data)
         goto error;
     }
 #endif
-
+    
     //send the original destination address to QUIC server 
     if (quicly_send_msg(quic_fd, quic_stream, (void *)&orig_dst, len) != 0) { 
         quicly_debug_printf(quic_stream->conn, "sending original connection header failed.\n");
@@ -210,18 +210,21 @@ void *handle_client(void *data)
         FD_ZERO(&readfds);
         FD_SET(tcp_fd, &readfds);
         
-        if (select(tcp_fd, &readfds, NULL, NULL, NULL) == -1) {
+        if (select(tcp_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
             perror("select failed");
                 goto error;
-            }    
+        }    
         if (FD_ISSET(tcp_fd, &readfds)) {
             char buff[4096];
             int bytes_received = read(tcp_fd, buff, sizeof(buff)); 
             if (bytes_received < 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
-            }
-
+            } 
+            
+	    fprintf(stdout, "[tcp: %d, stream: %ld] tcp read %d bytes.\n", 
+			    tcp_fd, quic_stream->stream_id, bytes_received);
+	  
             int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
             if (!ret) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d, stream: %ld] failed to send to quic stream.", 
@@ -252,6 +255,7 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
             close(tcp_fd);
             return;
         }
+	
         quicly_stream_t *nstream = NULL; 
         if (quicly_open_stream(quic, &nstream, 0) != 0) {
             quicly_debug_printf(quic, "quicly_open_stream() failed\n");
@@ -271,7 +275,8 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
         
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_client, (void *)data);
-    
+	
+	fprintf(stdout, "func: %s, line: %d, worker: %p.\n", __func__, __LINE__, worker_thread);
     }
 
     return;
