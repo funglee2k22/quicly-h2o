@@ -34,6 +34,16 @@ static quicly_stream_open_t stream_open = {client_on_stream_open};
 
 conn_stream_pair_node_t mmap_head; 
 
+int find_tcp_conn(conn_stream_pair_node_t *head, quicly_stream_t *stream)
+{ 
+    conn_stream_pair_node_t *p = head; 
+    while (p) { 
+        if (p->stream == stream)
+            return p->fd;
+    }
+    return -1;
+}
+
 
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
@@ -43,20 +53,33 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
 
     /* obtain contiguous bytes from the receive buffer */
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
-    
-    quicly_debug_printf(stream->conn, "stream: %ld received %zu bytes\n", stream->stream_id, input.len);
-    
-    //TODO write code to send data to tcp side. 
-#if 0
-    fwrite(input.base, 1, input.len, stdout);
-    fflush(stdout);
-    
+    quicly_debug_printf(stream->conn, "stream: %ld received %zu bytes", stream->stream_id, input.len);
+   
+    char buff[4096];
+    memncpy(buff, 4096, input.base, len);
+    int tcp_fd = find_tcp_conn(&mmap_head, stream);
+
+    if (tcp_fd < 0) { 
+        quicly_debug_printf(stream->conn, "stream: %ld, could not find tcp_sk to write", stream->stream_id);
+        return;
+    }
+
+    size_t bytes_sent = send(tcp_fd, buff, len, 0);    
+    if (bytes_sent == -1) { 
+        quicly_debug_printf(stream->conn, "stream: %ld -> tcp: %d, tcp send() failed", stream->stream_id, tcp_fd);
+        return;
+    }
+
+    quicly_debug_printf(stream->conn, "stream: %ld -> tcp: %d, bytes: %d sent", stream->stream_id, tcp_fd, bytes_sent);
+
+
     /* initiate connection close after receiving all data */
     if (quicly_recvstate_transfer_complete(&stream->recvstate))
         quicly_close(stream->conn, 0, "");
-#endif
+
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
+
 }
 
 
@@ -222,7 +245,7 @@ void *handle_client(void *data)
                 goto error;
             } 
             
-	    fprintf(stdout, "[tcp: %d, stream: %ld] tcp read %d bytes.\n", 
+	        fprintf(stdout, "[tcp: %d, stream: %ld] tcp read %d bytes.\n", 
 			    tcp_fd, quic_stream->stream_id, bytes_received);
 	  
             int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
