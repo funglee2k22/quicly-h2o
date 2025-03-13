@@ -182,8 +182,11 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
         }
 
         ++next_cid.master_id;
-        append_conn(conn); 
+        append_conn(conn);
 
+        quicly_debug_printf(conn, "quicly receive a packet %d bytes\n", packet->octets.len);
+ 
+#if 0
         if (packet->octets.len == 0) { 
             quicly_debug_printf(conn, "packet has zero length.\n");
         }
@@ -198,8 +201,9 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
             fprintf(stderr, "failed to create TCP connection.\n");
             //exit(1);
         }
+#endif
     } else {
-        
+         
         int ret = quicly_receive(conn, NULL, sa, packet);
         if(ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
             fprintf(stderr, "quicly_receive returned %i\n", ret);
