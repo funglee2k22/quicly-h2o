@@ -22,6 +22,29 @@ ptls_context_t *get_tlsctx()
 }
 
 
+void __debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
+{ 
+    char buf[1024];
+    va_list args;
+
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    fprintf("quicly_conn: %p, func: %s, line: %d, %s", conn, function, line, buf);
+    return;
+
+}
+
+int find_tcp_conn(conn_stream_pair_node_t *head, quicly_stream_t *stream)
+{ 
+    conn_stream_pair_node_t *p = head; 
+    while (p) { 
+        if (p->stream == stream)
+            return p->fd;
+    }
+    return -1;
+}
 
 int create_tcp_listener(short port)
 { 
