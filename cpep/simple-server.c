@@ -25,7 +25,7 @@
 
 static quicly_context_t server_ctx;
 static quicly_cid_plaintext_t next_cid; 
-quicly_conn_t **conns = {NULL};
+quicly_conn_t *conns[256] = {NULL};
 static size_t num_conns = 0;
 
 conn_stream_pair_node_t mmap_head; 
@@ -124,6 +124,7 @@ static quicly_conn_t *find_conn(struct sockaddr *sa, socklen_t salen, quicly_dec
     return NULL;
 }
 
+#if 0 
 static void append_conn(quicly_conn_t *conn)
 {
     ++num_conns;
@@ -142,6 +143,7 @@ static size_t remove_conn(size_t i)
     --num_conns;
     return i - 1;
 }
+#endif 
 
 int create_tcp_connection(const char *host, short port)
 {
@@ -166,59 +168,11 @@ int create_tcp_connection(const char *host, short port)
     return fd;
 }
 
-#if 0 
-static void handle_quicly_pkt(int udp_fd, quicly_decoded_packet_t *packet, struct sockaddr *sa, socklen_t salen)
-{
-    quicly_conn_t *conn = find_conn(sa, salen, packet);
-
-    if(conn == NULL) {
-        //new connect 
-        quicly_debug_printf(NULL, "got a new connection.\n");
-        int ret = quicly_accept(&conn, &server_ctx, 0, sa, packet, NULL, &next_cid, NULL, NULL);
-        if(ret != 0) {
-            fprintf(stderr, "quicly_accept failed with code %i\n", ret);
-            return;
-        }
-
-        ++next_cid.master_id;
-        append_conn(conn);
-
-        quicly_debug_printf(conn, "quicly receive a packet %d bytes\n", packet->octets.len);
- 
-        if (packet->octets.len == 0) { 
-            quicly_debug_printf(conn, "packet has zero length.\n");
-        }
-
-        // for new connection, the payload its the original destination IP and port 
-        struct sockaddr *din = (struct sockaddr *) packet->octets.base; 
-        //socklen_t din_len = packet->octets.len; 
-        int tcp_fd = create_tcp_connection(inet_ntoa(((struct sockaddr_in *)din)->sin_addr), 
-                            ntohs(((struct sockaddr_in *)din)->sin_port));
-
-        if (tcp_fd < 0) {
-            fprintf(stderr, "failed to create TCP connection.\n");
-            //exit(1);
-        }
-
-    } else { 
-        int ret = quicly_receive(conn, NULL, sa, packet);
-        if(ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
-             fprintf(stderr, "quicly_receive returned %i\n", ret);
-             exit(1);
-        }
-    }
-
-    quicly_debug_printf(conn, "quicly receive a packet %d bytes\n", packet->octets.len);
-
-    return;
-}
-#endif
-
-static void handle_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
+static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
 {
     size_t off = 0, i;
 
-    quicly_debug_printf(conns[0], "received %ld bytes UDP message.", dgram_len);
+    fprintf(stderr, "func: %s, line: %d, received %ld bytes UDP message.\n", __func__, __LINE__, dgram_len);
 
     /* split UDP datagram into multiple QUIC packets */
     while (off < dgram_len) {
@@ -259,10 +213,8 @@ void run_server_loop(int quic_srv_fd)
         FD_ZERO(&readfds);
         FD_SET(quic_srv_fd, &readfds); 
 
-        fprintf(stdout, "select is blocking ?\n");
-
         if (select(quic_srv_fd + 1, &readfds, NULL, NULL, &tv) == -1) {
-            fprintf(stderr, "func: %s, line: %d, select() error on UDP server socket %d\n", __func__, __LINE__, quic_srv_fd);
+            fprintf(stderr, "func: %s, line: %d, select error on UDP server socket %d\n", __func__, __LINE__, quic_srv_fd);
             break;
         }
 	
@@ -274,6 +226,7 @@ void run_server_loop(int quic_srv_fd)
             ssize_t rret;
             while ((rret = recvmsg(quic_srv_fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
+	    fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
             if (rret > 0)
                 process_quicly_msg(quic_srv_fd, conns, &msg, rret);
         }        

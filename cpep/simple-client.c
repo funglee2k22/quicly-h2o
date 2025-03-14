@@ -333,9 +333,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "quicly_open_stream() failed:%d\n", ret);
         return -1;
     }
-
-    
-    
     
     //TODO: adding a control thread to send ping-pong  
     run_loop(tcp_fd, quic_fd, conn); 
