@@ -28,8 +28,6 @@ static quicly_cid_plaintext_t next_cid;
 quicly_conn_t **conns = {NULL};
 static size_t num_conns = 0;
 
-quicly_conn_t **conn = NULL;
-
 conn_stream_pair_node_t mmap_head; 
 
 static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
@@ -168,8 +166,8 @@ int create_tcp_connection(const char *host, short port)
     return fd;
 }
 
-
-static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockaddr *sa, socklen_t salen)
+#if 0 
+static void handle_quicly_pkt(int udp_fd, quicly_decoded_packet_t *packet, struct sockaddr *sa, socklen_t salen)
 {
     quicly_conn_t *conn = find_conn(sa, salen, packet);
 
@@ -187,7 +185,6 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
 
         quicly_debug_printf(conn, "quicly receive a packet %d bytes\n", packet->octets.len);
  
-#if 0
         if (packet->octets.len == 0) { 
             quicly_debug_printf(conn, "packet has zero length.\n");
         }
@@ -202,7 +199,7 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
             fprintf(stderr, "failed to create TCP connection.\n");
             //exit(1);
         }
-#endif
+
     } else { 
         int ret = quicly_receive(conn, NULL, sa, packet);
         if(ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
@@ -215,30 +212,37 @@ static void handle_quicly_packet(quicly_decoded_packet_t *packet, struct sockadd
 
     return;
 }
+#endif
 
+static void handle_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
+{
+    size_t off = 0, i;
 
-void handle_quicly_msg(int quic_fd)
-{ 
-    uint8_t buf[4096];
-    struct sockaddr sa;
-    socklen_t salen = sizeof(sa);
-    quicly_decoded_packet_t packet;
-    ssize_t bytes_received;
+    quicly_debug_printf(conns[0], "received %ld bytes UDP message.", dgram_len);
 
-    while((bytes_received = recvfrom(quic_fd, buf, sizeof(buf), MSG_DONTWAIT, &sa, &salen)) != -1) {
-        fprintf(stdout, "received %ld bytes from %s, port: %d \n", 
-            bytes_received, inet_ntoa(((struct sockaddr_in *)&sa)->sin_addr), ntohs(((struct sockaddr_in *)&sa)->sin_port));
-            
-        for(ssize_t offset = 0; offset < bytes_received; ) {
-            size_t packet_len = quicly_decode_packet(&server_ctx, &packet, buf, bytes_received, &offset);
-            if(packet_len == SIZE_MAX) {
+    /* split UDP datagram into multiple QUIC packets */
+    while (off < dgram_len) {
+        quicly_decoded_packet_t decoded;
+        if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
+            return;
+        
+
+        /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
+        for (i = 0; conns[i] != NULL; ++i)
+            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
                 break;
-            }
-            handle_quicly_packet(&packet, &sa, salen);
+    
+        if (conns[i] != NULL) {
+            /* let the current connection handle ingress packets */
+            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
+    
+        } else {
+            /* assume that the packet is a new connection */
+            quicly_accept(conns + i, &server_ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL, NULL);
+            quicly_debug_printf(conns[i], "accept new quic connection, and who will handle this message ?\n");
         }
     }
-
-    fprintf(stdout, "func: %s, line: %d \n", __func__, __LINE__);
+    
     return;
 }
 
@@ -246,7 +250,6 @@ void run_server_loop(int quic_srv_fd)
 {
     fprintf(stdout, "starting server loop...\n"); 
     
-
     while (1) {
         struct timeval tv;
         tv.tv_sec = 10;
@@ -263,10 +266,16 @@ void run_server_loop(int quic_srv_fd)
             break;
         }
 	
-	fprintf(stderr, "func: %s, line: %d, select()ed on UDP socket %d\n", __func__, __LINE__, quic_srv_fd);
-
         if (FD_ISSET(quic_srv_fd, &readfds)) {
-            handle_quicly_msg(quic_srv_fd);   
+            uint8_t buf[4096];
+            struct sockaddr_storage sa;
+            struct iovec vec = {.iov_base = buf, .iov_len = sizeof(buf)};
+            struct msghdr msg = {.msg_name = &sa, .msg_namelen = sizeof(sa), .msg_iov = &vec, .msg_iovlen = 1};
+            ssize_t rret;
+            while ((rret = recvmsg(quic_srv_fd, &msg, 0)) == -1 && errno == EINTR)
+                ;
+            if (rret > 0)
+                process_quicly_msg(quic_srv_fd, conns, &msg, rret);
         }        
                 
     }
