@@ -177,9 +177,16 @@ static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr
     /* split UDP datagram into multiple QUIC packets */
     while (off < dgram_len) {
         quicly_decoded_packet_t decoded;
-        if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
+        if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX) { 
+            
             return;
-        
+        }
+       
+        fprintf(stderr, "decoded len: %d, cid: %d, msg.name: %s, msg.msg_iov[0].len: %d, msg: %s",
+                decoded.datagram_size, decoded.cid, 
+                inet_ntoa(((struct sockaddr_in *) msg ->msg_name)->sin_addr), 
+                msg->msg_iov[0].iov_len, 
+                msg->msg_iov[0].iov_base);
 
         /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
         for (i = 0; conns[i] != NULL; ++i)
