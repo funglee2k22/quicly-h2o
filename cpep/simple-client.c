@@ -184,6 +184,7 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 
     if (quicly_res != 0) { 
         quicly_debug_printf(stream->conn, "quicly_send failed with res: %d.\n", quicly_res);
+        quicly_close(stream->conn, quicly_res, "sent failed.");
         return -1; 
     } else if (num_dgrams == 0) { 
         quicly_debug_printf(stream->conn, "quicly_send() nothing to send.\n");
@@ -246,8 +247,7 @@ void *handle_client(void *data)
             if (!ret) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
                     tcp_fd, quic_stream->stream_id);
-                continue; //do not close socket for debugging purpose. 
-                //goto error; 
+                goto error; 
             }
         }
 
@@ -255,7 +255,7 @@ void *handle_client(void *data)
 
 error:
     close(tcp_fd);
-    //TODO close QUIC stream also 
+    //TODO close QUIC stream also
     return NULL;
 }
 
