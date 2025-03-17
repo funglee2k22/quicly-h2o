@@ -178,11 +178,10 @@ static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr
     while (off < dgram_len) {
         quicly_decoded_packet_t decoded;
         if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX) { 
-            
             return;
         } 
 
-	printf("decode len: %d, cid: %d, \n", decoded.datagram_size, decoded.cid); 
+	    printf("decode len: %d, cid: %d, \n", decoded.datagram_size, decoded.cid); 
 #if 0   
         fprintf(stderr, "decoded len: %d, cid: %d, msg.name: %s, msg.msg_iov[0].len: %d, msg: %s",
                 decoded.datagram_size, decoded.cid, 
