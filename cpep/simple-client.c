@@ -162,7 +162,9 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
         if (bytes_sent == -1) {
             perror("sendmsg failed");
             return false;
-        }   
+        } 
+        printf("func: %s, line: %d, sent %d bytes to %s.\n", __func__, __LINE__, 
+			bytes_sent, inet_ntoa(((struct sockaddr_in *) dest)->sin_addr));	
     }   
     
     return true;

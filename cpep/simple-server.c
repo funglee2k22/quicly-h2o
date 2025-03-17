@@ -180,14 +180,16 @@ static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr
         if (quicly_decode_packet(&server_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX) { 
             
             return;
-        }
-       
+        } 
+
+	printf("decode len: %d, cid: %d, \n", decoded.datagram_size, decoded.cid); 
+#if 0   
         fprintf(stderr, "decoded len: %d, cid: %d, msg.name: %s, msg.msg_iov[0].len: %d, msg: %s",
                 decoded.datagram_size, decoded.cid, 
                 inet_ntoa(((struct sockaddr_in *) msg ->msg_name)->sin_addr), 
                 msg->msg_iov[0].iov_len, 
                 msg->msg_iov[0].iov_base);
-
+#endif 
         /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
         for (i = 0; conns[i] != NULL; ++i)
             if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
@@ -213,7 +215,7 @@ void run_server_loop(int quic_srv_fd)
     
     while (1) {
         struct timeval tv;
-        tv.tv_sec = 10;
+        tv.tv_sec = 5;
         tv.tv_usec = 0;
 	
         fd_set readfds;
@@ -236,7 +238,9 @@ void run_server_loop(int quic_srv_fd)
 	    fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
             if (rret > 0)
                 process_quicly_msg(quic_srv_fd, conns, &msg, rret);
-        }        
+        } else { 
+            printf("idling ....\n");
+	}	
                 
     }
 error:
