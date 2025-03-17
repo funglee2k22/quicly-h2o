@@ -226,7 +226,7 @@ void run_server_loop(int quic_srv_fd)
             fprintf(stderr, "func: %s, line: %d, select error on UDP server socket %d\n", __func__, __LINE__, quic_srv_fd);
             break;
         }
-	
+	    
         if (FD_ISSET(quic_srv_fd, &readfds)) {
             uint8_t buf[4096];
             struct sockaddr_storage sa;
@@ -235,7 +235,7 @@ void run_server_loop(int quic_srv_fd)
             ssize_t rret;
             while ((rret = recvmsg(quic_srv_fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
-	    fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
+	        fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
             if (rret > 0)
                 process_quicly_msg(quic_srv_fd, conns, &msg, rret);
         } else { 

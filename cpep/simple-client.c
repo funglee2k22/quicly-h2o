@@ -163,8 +163,9 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
             perror("sendmsg failed");
             return false;
         } 
-        printf("func: %s, line: %d, sent %d bytes to %s.\n", __func__, __LINE__, 
-			bytes_sent, inet_ntoa(((struct sockaddr_in *) dest)->sin_addr));	
+        fprintf(stdout, "sent %d bytes to host: %s, port: %d, msg_iov_len %d \n", 
+            bytes_sent, inet_ntoa(((struct sockaddr_in *) dest)->sin_addr), 
+            ntohs(((struct sockaddr_in *) dest)->sin_port), mess.msg_iovlen);    
     }   
     
     return true;
@@ -334,6 +335,13 @@ int main(int argc, char **argv)
     if ((ret = quicly_open_stream(conn, &ctrl_stream, 0)) != 0) { 
         fprintf(stderr, "quicly_open_stream() failed:%d\n", ret);
         return -1;
+    } 
+
+    //Debug only 
+    { 
+        if (quicly_send_msg(quic_fd, ctrl_stream, "hello world!\n", strlen("hello world!\n")) != 0) { 
+            fprintf(stderr, "sending hello world on ctrl_stream %d failed.\n", ctrl_stream->stream_id);
+        }
     }
     
     //TODO: adding a control thread to send ping-pong  
