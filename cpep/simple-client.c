@@ -23,8 +23,6 @@
 #include "common.h"
 #include <picotls/../../t/util.h> 
 
-#define debug_ok();  fprintf(stdout, "func %s, line %d, we are good here.\n", __func__, __LINE__);
-
 static quicly_context_t client_ctx;
 static quicly_cid_plaintext_t next_cid;
 static ptls_iovec_t resumption_token; 
@@ -40,7 +38,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* read input to receive buffer */
     if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
-    debug_ok();
+
     /* obtain contiguous bytes from the receive buffer */
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
     quicly_debug_printf(stream->conn, "stream: %ld received %zu bytes\n", stream->stream_id, input.len);
@@ -173,6 +171,7 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
 
 int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 { 
+
     quicly_streambuf_egress_write(stream, buf, len); 
     
     #define SEND_BATCH_SIZE 16
@@ -182,6 +181,7 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
     size_t num_dgrams = SEND_BATCH_SIZE;
 
     int quicly_res = quicly_send(stream->conn, &dst, &src, dgrams, &num_dgrams, &dgrams_buf, sizeof(dgrams_buf)); 
+
     if (quicly_res != 0) { 
         quicly_debug_printf(stream->conn, "quicly_send failed with res: %d.\n", quicly_res);
         return -1; 
@@ -193,7 +193,7 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
     if (!send_dgrams(quic_fd, &dst.sa, dgrams, num_dgrams)) { 
         return -1;
     }
-    debug_ok();
+    
     return 0;
 }
 
@@ -340,8 +340,15 @@ int main(int argc, char **argv)
     //Debug only 
     { 
         if (quicly_send_msg(quic_fd, ctrl_stream, "hello world!\n", strlen("hello world!\n")) != 0) { 
-            fprintf(stderr, "sending hello world on ctrl_stream %d failed.\n", ctrl_stream->stream_id);
+            fprintf(stderr, "sending hello world on ctrl_stream %d failed.\n", ctrl_stream->stream_id); 
+	    return -1;
         }
+
+        if (quicly_send_msg(quic_fd, ctrl_stream, "hello world! 2nd time\n", strlen("hello world! 2nd time\n")) != 0) { 
+            fprintf(stderr, "sending hello world on ctrl_stream %d failed.\n", ctrl_stream->stream_id); 
+	    return -1;
+        }
+
     }
     
     //TODO: adding a control thread to send ping-pong  
