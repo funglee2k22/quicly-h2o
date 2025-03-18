@@ -45,7 +45,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
    
     char buff[4096];
     memcpy(buff, input.base, len);
-    int tcp_fd = find_tcp_conn(&mmap_head, stream);
+    int tcp_fd = find_tcp_conn(mmap_head.next, stream);
 
     if (tcp_fd < 0) { 
         quicly_debug_printf(stream->conn, "stream: %ld, could not find tcp_sk to write\n", stream->stream_id);
@@ -195,11 +195,11 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 	    return -1;
 	} 
     } else if (quicly_res == QUICLY_ERROR_FREE_CONNECTION) { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %d, ERROR_FREE_CONNECTION (res: 0x%4f).\n", stream->stream_id, quicly_res);
-	quicly_free(stream->conn);
+        quicly_debug_printf(stream->conn, "quicly_send stream: %d, ERROR_FREE_CONNECTION (res: 0x%4x).\n", stream->stream_id, quicly_res);
+	//quicly_free(stream->conn);
 	return -1;
     } else { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %d, failed with res: 0x%4f.\n", stream->stream_id, quicly_res);
+        quicly_debug_printf(stream->conn, "quicly_send stream: %d, failed with res: 0x%4x.\n", stream->stream_id, quicly_res);
         return -1;
     }
     
@@ -216,11 +216,9 @@ void process_quic_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssiz
             return;
         
         if (!quicly_is_destination(conn, NULL, msg->msg_name, &decoded)) { 
-            //should we call quicly_accept ? 
-            quicly_debug_printf(conn, "new connection ?");
+            quicly_debug_printf(conn, "new connection ? \n");
             break;               
         } else { 
-            quicly_debug_printf(conn, "calling quicly_receive ?");
             quicly_receive(conn, NULL, msg->msg_name, &decoded);
         }
     }
@@ -272,15 +270,15 @@ void *handle_client(void *data)
                 goto error;
             } 
             
-	        fprintf(stdout, "[tcp: %d -> stream: %ld] tcp read %d bytes.\n", 
-		    tcp_fd, quic_stream->stream_id, bytes_received);
-	  
             int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
             if (ret != 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
                     tcp_fd, quic_stream->stream_id);
 		goto error;
             }
+
+	    fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
+	        tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
         }
 
         if (FD_ISSET(quic_fd, &readfds)) { 
@@ -292,7 +290,7 @@ void *handle_client(void *data)
             while ((rret = recvmsg(quic_fd, &msg, 0)) == -1)
                 ;
  
-            fprintf(stdout, "[tcp: %d <- quic_sk_fd: %d] tcp read %d bytes.\n", 
+            fprintf(stdout, "[tcp: %d <- quic_sk_fd: %d] quic read %d bytes.\n", 
                     tcp_fd, quic_fd, rret);
             
             if (rret > 0)
@@ -342,7 +340,7 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_client, (void *)data);
 	
-	    fprintf(stdout, "func: %s, line: %d, worker: %p.\n", __func__, __LINE__, worker_thread);
+	fprintf(stdout, "func: %s, line: %d, worker: %p.\n", __func__, __LINE__, worker_thread);
     }
 
     return;
@@ -391,12 +389,6 @@ int main(int argc, char **argv)
             fprintf(stderr, "sending hello world on ctrl_stream %d failed.\n", ctrl_stream->stream_id); 
 	    return -1;
         }
-
-        if (quicly_send_msg(quic_fd, ctrl_stream, "hello world! 2nd time\n", strlen("hello world! 2nd time\n")) != 0) { 
-            fprintf(stderr, "sending hello world on ctrl_stream %d failed.\n", ctrl_stream->stream_id); 
-	    return -1;
-        }
-
     }
     
     //TODO: adding a control thread to send ping-pong  

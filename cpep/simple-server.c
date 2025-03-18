@@ -181,15 +181,6 @@ static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr
             return;
         } 
 
-	    printf("decode len: %d, cid: %d, \n", decoded.datagram_size, decoded.cid); 
-#if 0   
-        fprintf(stderr, "decoded len: %d, cid: %d, msg.name: %s, msg.msg_iov[0].len: %d, msg: %s",
-                decoded.datagram_size, decoded.cid, 
-                inet_ntoa(((struct sockaddr_in *) msg ->msg_name)->sin_addr), 
-                msg->msg_iov[0].iov_len, 
-                msg->msg_iov[0].iov_base);
-#endif 
-        /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
         for (i = 0; conns[i] != NULL; ++i)
             if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
                 break;
@@ -197,11 +188,9 @@ static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr
         if (conns[i] != NULL) {
             /* let the current connection handle ingress packets */
             quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
-    
         } else {
             /* assume that the packet is a new connection */
             quicly_accept(conns + i, &server_ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL, NULL);
-            quicly_debug_printf(conns[i], "accept new quic connection, and who will handle this message ?\n");
         }
     }
     

@@ -39,9 +39,14 @@ void __debug_printf(quicly_conn_t *conn, const char *function, int line, const c
 int find_tcp_conn(conn_stream_pair_node_t *head, quicly_stream_t *stream)
 { 
     conn_stream_pair_node_t *p = head; 
-    while (p) { 
+    int i = 0; 
+    while (p) {
+	//fprintf(stdout, "pair node[%d]: {tcp_fd: %d, stream: %p, stream_id: %d}, target_stream_id: %d\n", 
+	//	       i, p->fd, p->stream, p->stream->stream_id, stream->stream_id);	
         if (p->stream == stream)
             return p->fd;
+	i++;
+	p = p->next;
     }
     return -1;
 }
