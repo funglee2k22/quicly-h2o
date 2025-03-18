@@ -156,14 +156,14 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
         };  
             
         ssize_t bytes_sent;
-        while ((bytes_sent = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR);
+        while ((bytes_sent = sendmsg(fd, &mess, 0)) == -1)
+		;
+
         if (bytes_sent == -1) {
             perror("sendmsg failed");
             return false;
         } 
-        fprintf(stdout, "sent %d bytes to host: %s, port: %d, msg_iov_len %d \n", 
-            bytes_sent, inet_ntoa(((struct sockaddr_in *) dest)->sin_addr), 
-            ntohs(((struct sockaddr_in *) dest)->sin_port), mess.msg_iovlen);    
+
     }   
     
     return true;
@@ -171,6 +171,10 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
 
 int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 { 
+    if (stream == NULL || !quicly_sendstate_is_open(&stream->sendstate)) {
+	quicly_debug_printf(stream->conn, "stream: %d, sendstate: %d \n", stream->stream_id, stream->sendstate);
+        return 0;
+    }	
 
     quicly_streambuf_egress_write(stream, buf, len); 
     
@@ -182,16 +186,20 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 
     int quicly_res = quicly_send(stream->conn, &dst, &src, dgrams, &num_dgrams, &dgrams_buf, sizeof(dgrams_buf)); 
 
-    if (quicly_res != 0) { 
-        quicly_debug_printf(stream->conn, "quicly_send failed with res: %d.\n", quicly_res);
-        quicly_close(stream->conn, quicly_res, "sent failed.");
-        return -1; 
-    } else if (num_dgrams == 0) { 
-        quicly_debug_printf(stream->conn, "quicly_send() nothing to send.\n");
-        return 0;
-    }
-
-    if (!send_dgrams(quic_fd, &dst.sa, dgrams, num_dgrams)) { 
+    if (quicly_res == 0) {
+	if (num_dgrams == 0) { 
+            quicly_debug_printf(stream->conn, "quicly_send() nothing to send.\n");
+	    return 0;
+	}
+        if (!send_dgrams(quic_fd, &dst.sa, dgrams, num_dgrams)) { 
+	    return -1;
+	} 
+    } else if (quicly_res == QUICLY_ERROR_FREE_CONNECTION) { 
+        quicly_debug_printf(stream->conn, "quicly_send stream: %d, ERROR_FREE_CONNECTION (res: 0x%4f).\n", stream->stream_id, quicly_res);
+	quicly_free(stream->conn);
+	return -1;
+    } else { 
+        quicly_debug_printf(stream->conn, "quicly_send stream: %d, failed with res: 0x%4f.\n", stream->stream_id, quicly_res);
         return -1;
     }
     
@@ -268,10 +276,10 @@ void *handle_client(void *data)
 		    tcp_fd, quic_stream->stream_id, bytes_received);
 	  
             int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
-            if (!ret) { 
+            if (ret != 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
                     tcp_fd, quic_stream->stream_id);
-                goto error; 
+		goto error;
             }
         }
 

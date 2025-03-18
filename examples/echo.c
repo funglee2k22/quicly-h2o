@@ -257,8 +257,9 @@ static int run_loop(int fd, quicly_conn_t *client)
                 size_t j;
                 for (j = 0; j != num_dgrams; ++j) {
                     send_one(fd, &dest.sa, &dgrams[j]);
+		    printf("func:%s, line: %d, sent dgrams[%d] len: %d bytes.\n", __func__, __LINE__, j, dgrams[j].iov_len);    
 		}
-                printf("func:%s, line: %d, received and echo back.\n", __func__, __LINE__);
+                
 
             } break;
             case QUICLY_ERROR_FREE_CONNECTION:
