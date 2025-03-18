@@ -28,6 +28,7 @@ typedef struct conn_stream_pair_node {
 typedef struct pthread_work { 
     int tcp_fd;
     int quic_fd;
+    quicly_conn_t *conn; 
     quicly_stream_t *stream; 
 } worker_data_t; 
 
