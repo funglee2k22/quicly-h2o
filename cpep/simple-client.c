@@ -198,8 +198,31 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
     return 0;
 }
 
+void process_quic_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssize_t dgram_len)
+{
+    size_t off = 0, i; 
+    
+    while (off < dgram_len) { 
+        quicly_decoded_packet_t decoded; 
+        if (quicly_decode_packet(&client_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
+            return;
+        
+        if (!quicly_is_destination(conn, NULL, msg->msg_name, &decoded)) { 
+            //should we call quicly_accept ? 
+            quicly_debug_printf(conn, "new connection ?");
+            break;               
+        } else { 
+            quicly_debug_printf(conn, "calling quicly_receive ?");
+            quicly_receive(conn, NULL, msg->msg_name, &decoded);
+        }
+    }
+    return ; 
+}
+
+
 void *handle_client(void *data)
-{   
+{  
+    quicly_conn_t *quic_conn = ((worker_data_t *) data)->conn; 
     quicly_stream_t *quic_stream = ((worker_data_t *) data)->stream;
     int tcp_fd = ((worker_data_t *) data)->tcp_fd;
     int quic_fd = ((worker_data_t *) data)->quic_fd;
@@ -226,9 +249,10 @@ void *handle_client(void *data)
     while (1) { 
         fd_set readfds;
         FD_ZERO(&readfds);
+        FD_SET(quic_fd, &readfds);
         FD_SET(tcp_fd, &readfds);
-        
-        if (select(tcp_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+
+        if (select(tcp_fd > quic_fd ? tcp_fd + 1 : quic_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
             perror("select failed");
                 goto error;
         }    
@@ -240,7 +264,7 @@ void *handle_client(void *data)
                 goto error;
             } 
             
-	    fprintf(stdout, "[tcp: %d -> stream: %ld] tcp read %d bytes.\n", 
+	        fprintf(stdout, "[tcp: %d -> stream: %ld] tcp read %d bytes.\n", 
 		    tcp_fd, quic_stream->stream_id, bytes_received);
 	  
             int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
@@ -251,6 +275,21 @@ void *handle_client(void *data)
             }
         }
 
+        if (FD_ISSET(quic_fd, &readfds)) { 
+            uint8_t buf[4096];
+            struct sockaddr_storage sa; 
+            struct iovec vec = {.iov_base = buf, .iov_len = sizeof(buf)};
+            struct msghdr msg = {.msg_name = &sa, .msg_namelen = sizeof(sa), .msg_iov = &vec, .msg_iovlen = 1};
+            ssize_t rret = 0;
+            while ((rret = recvmsg(quic_fd, &msg, 0)) == -1)
+                ;
+ 
+            fprintf(stdout, "[tcp: %d <- quic_sk_fd: %d] tcp read %d bytes.\n", 
+                    tcp_fd, quic_fd, rret);
+            
+            if (rret > 0)
+                process_quic_msg(quic_fd, quic_conn, &msg, rret);
+        }
     }
 
 error:
@@ -289,6 +328,7 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
         worker_data_t *data = (worker_data_t *)malloc(sizeof(worker_data_t));
         data->tcp_fd = client_fd;
         data->quic_fd = quic_fd;
+        data->conn = quic;
         data->stream = nstream; 
         
         pthread_t worker_thread;
