@@ -29,12 +29,15 @@ quicly_conn_t *conns[256] = {NULL};
 static size_t num_conns = 0;
 
 conn_stream_pair_node_t mmap_head;
-static quicly_stream_open_t on_stream_open = {server_on_stream_open};
-static quicly_closed_by_remote_t closed_by_remote = {server_on_conn_close};
 
 static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
 static void server_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn,
                                     int err, uint64_t frame_type, const char *reason, size_t reason_len);
+
+
+static quicly_stream_open_t on_stream_open = {server_on_stream_open};
+static quicly_closed_by_remote_t closed_by_remote = {server_on_conn_close};
+
 
 static void server_on_stop_sending(quicly_stream_t *stream, int err)
 {
@@ -140,8 +143,6 @@ int create_tcp_connection(const char *host, short port)
 static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
 {
     size_t off = 0, i;
-
-    fprintf(stderr, "func: %s, line: %d, received %ld bytes UDP message.\n", __func__, __LINE__, dgram_len);
 
     /* split UDP datagram into multiple QUIC packets */
     while (off < dgram_len) {
