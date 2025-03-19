@@ -65,6 +65,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
 
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
+
 }
 
 
@@ -107,43 +108,12 @@ static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_s
 
     stream->callbacks = &stream_callbacks;
 
-    quicly_debug_printf(stream->conn, "stream: %ld is openned.", stream->stream_id);
+    quicly_debug_printf(stream->conn, "stream: %ld is openned.\n", stream->stream_id);
 
     return ret;
 }
 
 #define MSG_DONTWAIT 0x80 
-
-static quicly_conn_t *find_conn(struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *packet)
-{
-    for(size_t i = 0; i < num_conns; ++i) {
-        if(quicly_is_destination(conns[i], NULL, sa, packet)) {
-            return conns[i];
-        }
-    }
-    return NULL;
-}
-
-#if 0 
-static void append_conn(quicly_conn_t *conn)
-{
-    ++num_conns;
-    conns = realloc(conns, sizeof(quicly_conn_t*) * num_conns);
-    assert(conns != NULL);
-    conns[num_conns - 1] = conn;
-
-    *quicly_get_data(conn) = calloc(1, sizeof(int64_t));
-}
-
-static size_t remove_conn(size_t i)
-{
-    free(*quicly_get_data(conns[i]));
-    quicly_free(conns[i]);
-    memmove(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(quicly_conn_t*));
-    --num_conns;
-    return i - 1;
-}
-#endif 
 
 int create_tcp_connection(const char *host, short port)
 {
@@ -184,13 +154,15 @@ static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr
         for (i = 0; conns[i] != NULL; ++i)
             if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
                 break;
-    
+
         if (conns[i] != NULL) {
             /* let the current connection handle ingress packets */
+            quicly_debug_printf(conns[i], "reuse the current connection.\n"); 
             quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
         } else {
             /* assume that the packet is a new connection */
             quicly_accept(conns + i, &server_ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL, NULL);
+	    quicly_debug_printf(conns[i], "find a new connection.\n"); 
         }
     }
     
@@ -226,9 +198,7 @@ void run_server_loop(int quic_srv_fd)
 	        fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
             if (rret > 0)
                 process_quicly_msg(quic_srv_fd, conns, &msg, rret);
-        } else { 
-            printf("idling ....\n");
-	}	
+	 }
                 
     }
 error:
