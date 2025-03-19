@@ -138,12 +138,14 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         fprintf(stderr, "no data in receive buffer.\n");
         return;
     }
-    
+
+    /* remove used bytes from receive buffer */
+    quicly_streambuf_ingress_shift(stream, input.len);
 
     fprintf(stderr, "QUIC stream [%d], bytes_received: %d,\n", stream->stream_id, input.len);
 
     int tcp_fd = find_tcp_conn(mmap_head.next, stream); 
-    while (tcp_fd < 0 && stream->stream_id >= 0) {
+    while (tcp_fd < 0) {
         fprintf(stderr, "no TCP connection found for QUIC stream [%d].\n", stream->stream_id);
         ////assume the first 16 bytes of QUIC message is the original destination address
         struct sockaddr_storage orig_dst;
@@ -154,7 +156,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
                 inet_ntoa(((struct sockaddr_in *)&orig_dst)->sin_addr), 
                 ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
         
-        tcp_fd = create_tcp_connection((char *)&orig_dst, ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
+        tcp_fd = create_tcp_connection((struct sockaddr *)&orig_dst);
         if (tcp_fd < 0) {
             fprintf(stderr, "failed to create TCP connection to original destination.\n");
             break;     
@@ -173,11 +175,10 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         data->quic_fd = quicly_get_fd(stream->conn);
 
         pthread_t worker_thread;
-        pthread_create(&worker_thread, NULL, handle_isp_side, (void *)data);
+        pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);
 	
-	    fprintf(stdout, "func: %s, line: %d, worker: %p, handle [quic: %d <- tcp: %d]\n", 
-            __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
-
+	fprintf(stdout, "func: %s, line: %d, worker: %p, handle [quic: %d <- tcp: %d]\n", 
+        	 __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
     }
 
     if (quicly_sendstate_is_open(&stream->sendstate) && (input.len > 0)) {
@@ -188,8 +189,6 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
             quicly_streambuf_egress_shutdown(stream);
     }
 
-    /* remove used bytes from receive buffer */
-    quicly_streambuf_ingress_shift(stream, input.len);
 
 }
 
@@ -238,9 +237,27 @@ static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_s
     return ret;
 }
 
-#define MSG_DONTWAIT 0x80 
+int create_tcp_connection(struct sockaddr *sa)
+{ 
+    int fd;
+   
+    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("socket failed");
+        return -1;
+    }
 
-int create_tcp_connection(const char *host, short port)
+    
+    if (connect(fd, sa, sizeof(struct sockaddr)) == -1) {
+        perror("connect failed");
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+#if 0
+int create_tcp_connection(char *host, short port)
 {
     int fd;
     struct sockaddr_in sa;
@@ -262,6 +279,7 @@ int create_tcp_connection(const char *host, short port)
 
     return fd;
 }
+#endif
 
 static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
 {
@@ -314,7 +332,7 @@ void run_server_loop(int quic_srv_fd)
             ssize_t rret;
             while ((rret = recvmsg(quic_srv_fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
-            fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
+            fprintf(stderr, "read %ld bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
             if (rret > 0)
                 process_quicly_msg(quic_srv_fd, conns, &msg, rret);
         } /* End of if (FD_ISSET(quic_srv_fd, &readfds)) */ 
