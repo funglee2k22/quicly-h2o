@@ -103,8 +103,8 @@ void *handle_isp_server(void *data)
                 if (quicly_recvstate_transfer_complete(&quic_stream->recvstate))
                     quicly_streambuf_egress_shutdown(quic_stream);
                 
-	            fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
-	                    tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
+                fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
+                        tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
             }
         }
     }
@@ -176,9 +176,9 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
 
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);
-	
-	fprintf(stdout, "func: %s, line: %d, worker: %ld, handle [quic: %ld <- tcp: %d]\n", 
-       	                __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
+    
+        fprintf(stdout, "func: %s, line: %d, worker: %ld, handle [quic: %ld <- tcp: %d]\n", 
+                           __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
     }
 
     if (tcp_fd > 0 && input.len > 0) {

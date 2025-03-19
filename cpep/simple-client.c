@@ -185,6 +185,11 @@ void *handle_client(void *data)
     }
 #endif
     
+    fprintf(stdout, "func: %s, line: %d, TCP orig dest. addr.: %s:%d\n", 
+            __func__, __LINE__, 
+            inet_ntoa(((struct sockaddr_in *)&orig_dst)->sin_addr), 
+            ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
+
     //send the original destination address to QUIC server 
     if (quicly_send_msg(quic_fd, quic_stream, (void *)&orig_dst, len) != 0) { 
         quicly_debug_printf(quic_stream->conn, "sending original connection header failed.\n");
@@ -245,8 +250,6 @@ error:
     //TODO close QUIC stream also
     return NULL;
 }
-
-
 
 void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
 {  
