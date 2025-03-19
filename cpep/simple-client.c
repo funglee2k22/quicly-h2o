@@ -68,6 +68,8 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
 
+    return;
+
 }
 
 
@@ -340,7 +342,7 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_client, (void *)data);
 	
-	fprintf(stdout, "func: %s, line: %d, worker: %p.\n", __func__, __LINE__, worker_thread);
+	    fprintf(stdout, "func: %s, line: %d, worker: %p.\n", __func__, __LINE__, worker_thread);
     }
 
     return;

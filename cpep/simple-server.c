@@ -43,11 +43,90 @@ static void server_on_stop_sending(quicly_stream_t *stream, int err)
 {
     fprintf(stderr, "received STOP_SENDING: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
+} 
+
+static void ctrl_stream_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+{ 
+    fprintf(stderr, "func: %s, line: %d, stream: [%d] received control message.\n",
+             __func__, __LINE__, stream->stream_id);
+
+    if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
+        return;
+
+    /* obtain contiguous bytes from the receive buffer */
+    ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
+    if (input.len == 0) {
+        fprintf(stderr, "no data in control stream receive buffer.\n");
+        return;
+    } 
+
+    fprintf(stderr, "QUIC control stream [%d], bytes_received: %zu\n", stream->stream_id, input.len);
+    fprintf(stderr, "control message: %.*s\n", (int)input.len, (char *)input.base);
+
+    /* remove used bytes from receive buffer */
+    quicly_streambuf_ingress_shift(stream, input.len);
+
+    return;
+}
+
+void *handle_isp_server(void *data)
+{  
+    quicly_conn_t *quic_conn = ((worker_data_t *) data)->conn; 
+    quicly_stream_t *quic_stream = ((worker_data_t *) data)->stream;
+    int tcp_fd = ((worker_data_t *) data)->tcp_fd;
+    int quic_fd = ((worker_data_t *) data)->quic_fd;
+
+    while (1) { 
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(tcp_fd, &readfds);
+
+        if (select(tcp_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+            fprintf(stderr, "func: %s, line: %d, thread_id: %d, [tcp: %d -> stream: %d] select filed.",  
+                __func__, __LINE__, get_current_thread_id(), tcp_fd, quic_stream->stream_id);
+            perror("select failed");
+            goto error;
+        }
+
+        if (FD_ISSET(tcp_fd, &readfds)) {
+            char buff[4096];
+            int bytes_received = read(tcp_fd, buff, sizeof(buff)); 
+            if (bytes_received < 0) { 
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
+                goto error;
+            } 
+            
+            int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
+            if (ret != 0) { 
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
+                    tcp_fd, quic_stream->stream_id);
+		        goto error;
+            }
+
+	        fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
+	                    tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
+        }
+
+    }
+
+error:
+    close(tcp_fd);
+    //TODO close QUIC stream also
+    free(data);
+    return NULL;
 }
 
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
-    printf("func: %s, line: %d, entering\n", __func__, __LINE__); 
+    printf("func: %s, line: %d, stream: [%d] received QUIC message.\n",
+             __func__, __LINE__, stream->stream_id);
+
+    if (stream->stream_id == 0) {
+        /* control stream, handle it separately */
+        ctrl_stream_on_receive(stream, off, src, len);
+        return;
+    }       
+ 
     /* read input to receive buffer */
     if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
@@ -55,7 +134,51 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* obtain contiguous bytes from the receive buffer */
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
 
+    if (input.len == 0) {
+        fprintf(stderr, "no data in receive buffer.\n");
+        return;
+    }
+    
+
+    fprintf(stderr, "QUIC stream [%d], bytes_received: %d,\n", stream->stream_id, input.len);
+
     int tcp_fd = find_tcp_conn(mmap_head.next, stream); 
+    while (tcp_fd < 0 && stream->stream_id >= 0) {
+        fprintf(stderr, "no TCP connection found for QUIC stream [%d].\n", stream->stream_id);
+        ////assume the first 16 bytes of QUIC message is the original destination address
+        struct sockaddr_storage orig_dst;
+        socklen_t len = sizeof(orig_dst);
+        memcpy(&orig_dst, input.base, len);
+
+        fprintf(stderr, "TCP original destination: %s:%d\n", 
+                inet_ntoa(((struct sockaddr_in *)&orig_dst)->sin_addr), 
+                ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
+        
+        tcp_fd = create_tcp_connection((char *)&orig_dst, ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
+        if (tcp_fd < 0) {
+            fprintf(stderr, "failed to create TCP connection to original destination.\n");
+            break;     
+        }
+
+        conn_stream_pair_node_t  *node = (conn_stream_pair_node_t *)malloc(sizeof(conn_stream_pair_node_t));
+        node->fd = tcp_fd;
+        node->stream = stream;
+        node->next = mmap_head.next;
+        mmap_head.next = node;
+
+        worker_data_t *data = (worker_data_t *)malloc(sizeof(worker_data_t));
+        data->tcp_fd = tcp_fd;
+        data->conn = stream->conn;
+        data->stream = stream; 
+        data->quic_fd = quicly_get_fd(stream->conn);
+
+        pthread_t worker_thread;
+        pthread_create(&worker_thread, NULL, handle_isp_side, (void *)data);
+	
+	    fprintf(stdout, "func: %s, line: %d, worker: %p, handle [quic: %d <- tcp: %d]\n", 
+            __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
+
+    }
 
     if (quicly_sendstate_is_open(&stream->sendstate) && (input.len > 0)) {
         quicly_streambuf_egress_write(stream, input.base, input.len);
