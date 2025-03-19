@@ -178,13 +178,17 @@ void *handle_client(void *data)
     struct sockaddr_storage orig_dst;
     socklen_t len = sizeof(orig_dst);
 
-#ifdef SO_ORIGINAL_DST 
+#ifndef SO_ORIGINAL_DST
+#define SO_ORIGINAL_DST 80
+#endif
+
+#ifdef SO_ORIGINAL_DST       	
     if (getsockopt(tcp_fd, SOL_IP, SO_ORIGINAL_DST, &orig_dst, &len) != 0) {
         fprintf(stderr, "failed to get original destination address\n");
         goto error;
     }
 #endif
-    
+
     fprintf(stdout, "func: %s, line: %d, TCP orig dest. addr.: %s:%d\n", 
             __func__, __LINE__, 
             inet_ntoa(((struct sockaddr_in *)&orig_dst)->sin_addr), 
@@ -264,22 +268,6 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
             return;
         }
 
-        struct sockaddr_storage orig_dst;
-        socklen_t len = sizeof(orig_dst);
-    
-    #ifdef SO_ORIGINAL_DST 
-        if (getsockopt(tcp_fd, SOL_IP, SO_ORIGINAL_DST, &orig_dst, &len) != 0) {
-            fprintf(stderr, "failed to get original destination address\n");
-            goto error;
-        }
-    #endif
-        
-        fprintf(stdout, "func: %s, line: %d, TCP orig dest. addr.: %s:%d\n", 
-                __func__, __LINE__, 
-                inet_ntoa(((struct sockaddr_in *)&orig_dst)->sin_addr), 
-                ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
-
-	
         quicly_stream_t *nstream = NULL; 
         if (quicly_open_stream(quic, &nstream, 0) != 0) {
             quicly_debug_printf(quic, "quicly_open_stream() failed\n");
