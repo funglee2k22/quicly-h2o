@@ -28,14 +28,13 @@ static quicly_cid_plaintext_t next_cid;
 quicly_conn_t *conns[256] = {NULL};
 static size_t num_conns = 0;
 
-conn_stream_pair_node_t mmap_head; 
+conn_stream_pair_node_t mmap_head;
+static quicly_stream_open_t on_stream_open = {server_on_stream_open};
+static quicly_closed_by_remote_t closed_by_remote = {server_on_conn_close};
 
 static quicly_error_t server_on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream);
 static void server_on_conn_close(quicly_closed_by_remote_t *self, quicly_conn_t *conn,
-	  int err, uint64_t frame_type, const char *reason, size_t reason_len);
-
-static quicly_stream_open_t on_stream_open = {server_on_stream_open};
-static quicly_closed_by_remote_t closed_by_remote = {server_on_conn_close};
+                                    int err, uint64_t frame_type, const char *reason, size_t reason_len);
 
 static void server_on_stop_sending(quicly_stream_t *stream, int err)
 {
@@ -162,7 +161,7 @@ static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr
         } else {
             /* assume that the packet is a new connection */
             quicly_accept(conns + i, &server_ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL, NULL);
-	    quicly_debug_printf(conns[i], "find a new connection.\n"); 
+            quicly_debug_printf(conns[i], "find a new connection.\n"); 
         }
     }
     
@@ -174,19 +173,15 @@ void run_server_loop(int quic_srv_fd)
     fprintf(stdout, "starting server loop...\n"); 
     
     while (1) {
-        struct timeval tv;
-        tv.tv_sec = 5;
-        tv.tv_usec = 0;
-	
+        struct timeval tv = {.tv_sec = 5, .tv_usec = 0}; 
         fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(quic_srv_fd, &readfds); 
 
-        if (select(quic_srv_fd + 1, &readfds, NULL, NULL, &tv) == -1) {
-            fprintf(stderr, "func: %s, line: %d, select error on UDP server socket %d\n", __func__, __LINE__, quic_srv_fd);
-            break;
-        }
-	    
+        do {
+            FD_ZERO(&readfds);
+            FD_SET(quic_srv_fd, &readfds); 
+        } while (select(quic_srv_fd + 1, &readfds, NULL, NULL, &tv) == -1 && errno == EINTR);
+        
+        
         if (FD_ISSET(quic_srv_fd, &readfds)) {
             uint8_t buf[4096];
             struct sockaddr_storage sa;
@@ -195,13 +190,43 @@ void run_server_loop(int quic_srv_fd)
             ssize_t rret;
             while ((rret = recvmsg(quic_srv_fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
-	        fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
+            fprintf(stderr, "read %d bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
             if (rret > 0)
                 process_quicly_msg(quic_srv_fd, conns, &msg, rret);
-	 }
+        } /* End of if (FD_ISSET(quic_srv_fd, &readfds)) */ 
+
+        /* send QUIC packets, if any */
+        for (size_t i = 0; conns[i] != NULL; ++i) {
+            quicly_address_t dest, src;
+            struct iovec dgrams[10];
+            uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * server_ctx.transport_params.max_udp_payload_size];
+            size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
+            int ret = quicly_send(conns[i], &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
+            switch (ret) {
+            case 0: {
+                size_t j;
+                for (j = 0; j != num_dgrams; ++j) {
+                    struct msghdr mess = {.msg_name = &dest.sa, .msg_namelen = quicly_get_socklen(&dest.sa), 
+                                          .msg_iov = &dgrams[j], .msg_iovlen = 1};
+                    sendmsg(quic_srv_fd, &mess, MSG_DONTWAIT);
+                }
+                break;
+            }
+            case QUICLY_ERROR_FREE_CONNECTION:
+                fprintf(stderr, "free connection\n");
+                quicly_free(conns[i]);
+                conns[i] = NULL;
+                break;
+            default:
+                fprintf(stderr, "quicly_send returned with error %d\n", ret);
+                goto error;
+            }
+        } /* End of for (size_t i = 0; conns[i] != NULL; ++i) */
                 
-    }
+    } /* End of While loop */
+
 error:
+
     close(quic_srv_fd);
 
 }
@@ -210,10 +235,11 @@ error:
 void  setup_quicly_ctx(const char *cert, const char *key, const char *logfile)
 {
     setup_session_cache(get_tlsctx());
-    quicly_amend_ptls_context(get_tlsctx());
-    
+    quicly_amend_ptls_context(get_tlsctx()); 
+
     server_ctx = quicly_spec_context;
     server_ctx.tls = get_tlsctx();
+    quicly_amend_ptls_context(server_ctx.tls);
     server_ctx.stream_open = &on_stream_open;
     server_ctx.closed_by_remote = &closed_by_remote;
     server_ctx.transport_params.max_stream_data.uni = UINT32_MAX;
@@ -234,6 +260,9 @@ int main(int argc, char **argv)
     short udp_listen_port = 4433;   //port is quic server listening UDP port 
     char *cert_path = "server.crt";
     char *key_path = "server.key";
+
+
+    quicly_stream_open_t stream_open = {server_on_stream_open};
 
     setup_quicly_ctx(cert_path, key_path, NULL); 
     

@@ -117,7 +117,7 @@ static void on_receive(quicly_stream_t *stream, size_t off, const void *src, siz
 
     if (is_server()) {
         /* server: echo back to the client */
-	fprintf(stdout, "func: %s, line: %d, is it called ? \n", __func__, __LINE__);
+    fprintf(stdout, "func: %s, line: %d, is it called ? \n", __func__, __LINE__);
         if (quicly_sendstate_is_open(&stream->sendstate) && (input.len > 0)) {
             quicly_streambuf_egress_write(stream, input.base, input.len);
             /* shutdown the stream after echoing all data */
@@ -153,23 +153,23 @@ static void process_msg(int is_client, quicly_conn_t **conns, struct msghdr *msg
         if (conns[i] != NULL) {
             /* let the current connection handle ingress packets */
             quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
-	    printf("func: %s, line: %d, after quicly_receive(), decoded.cid.dest.plaintext:%d\n", 
-			    __func__, __LINE__,
-			    decoded.cid.dest.plaintext.path_id);
+        printf("func: %s, line: %d, after quicly_receive(), decoded.cid.dest.plaintext:%d\n", 
+                __func__, __LINE__,
+                decoded.cid.dest.plaintext.path_id);
         } else if (!is_client) {
             /* assume that the packet is a new connection */
-	    printf("func: %s, line: %d, before quicly_accept(), next_cid.plaintext.master_id:%d, path_id: %d\n", 
-			    __func__, __LINE__,
-			    next_cid.master_id,
-			    next_cid.path_id);
+        printf("func: %s, line: %d, before quicly_accept(), next_cid.plaintext.master_id:%d, path_id: %d\n", 
+                __func__, __LINE__,
+                next_cid.master_id,
+                next_cid.path_id);
             quicly_accept(conns + i, &ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL, NULL);
-	    printf("func: %s, line: %d, after quicly_accept(), next_cid.plaintext.master_id:%d, path_id: %d\n", 
-			    __func__, __LINE__,
-			    next_cid.master_id,
-			    next_cid.path_id);
-	    printf("func: %s, line: %d, after quicly_accept(), decoded.cid.dest.plaintext:%d\n", 
-			    __func__, __LINE__,
-			    decoded.cid.dest.plaintext.path_id);
+        printf("func: %s, line: %d, after quicly_accept(), next_cid.plaintext.master_id:%d, path_id: %d\n", 
+                __func__, __LINE__,
+                next_cid.master_id,
+                next_cid.path_id);
+        printf("func: %s, line: %d, after quicly_accept(), decoded.cid.dest.plaintext:%d\n", 
+                __func__, __LINE__,
+                decoded.cid.dest.plaintext.path_id);
         }
     }
 }
@@ -230,8 +230,8 @@ static int run_loop(int fd, quicly_conn_t *client)
                 ;
             if (rret > 0)
                 process_msg(client != NULL, conns, &msg, rret);
-	    fprintf(stdout, "func: %s, line: %d, after process_msg, received %d bytes.\n", 
-			    __func__, __LINE__, rret);
+                fprintf(stdout, "func: %s, line: %d, after process_msg, received %d bytes.\n", 
+                                __func__, __LINE__, rret);
         }
 
         /* read stdin, send the input to the active stram */
@@ -253,7 +253,7 @@ static int run_loop(int fd, quicly_conn_t *client)
                 size_t j;
                 for (j = 0; j != num_dgrams; ++j) {
                     send_one(fd, &dest.sa, &dgrams[j]);
-		}
+                }
                 printf("func:%s, line: %d, received and echo back.\n", __func__, __LINE__);
 
             } break;
