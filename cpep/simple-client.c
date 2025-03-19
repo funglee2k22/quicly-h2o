@@ -171,42 +171,6 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
     return true;
 }       
 
-int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
-{ 
-    if (stream == NULL || !quicly_sendstate_is_open(&stream->sendstate)) {
-	quicly_debug_printf(stream->conn, "stream: %d, sendstate: %d \n", stream->stream_id, stream->sendstate);
-        return 0;
-    }	
-
-    quicly_streambuf_egress_write(stream, buf, len); 
-    
-    #define SEND_BATCH_SIZE 16
-    quicly_address_t src, dst;
-    struct iovec dgrams[SEND_BATCH_SIZE];
-    uint8_t dgrams_buf[SEND_BATCH_SIZE * client_ctx.transport_params.max_udp_payload_size];
-    size_t num_dgrams = SEND_BATCH_SIZE;
-
-    int quicly_res = quicly_send(stream->conn, &dst, &src, dgrams, &num_dgrams, &dgrams_buf, sizeof(dgrams_buf)); 
-
-    if (quicly_res == 0) {
-	if (num_dgrams == 0) { 
-            quicly_debug_printf(stream->conn, "quicly_send() nothing to send.\n");
-	    return 0;
-	}
-        if (!send_dgrams(quic_fd, &dst.sa, dgrams, num_dgrams)) { 
-	    return -1;
-	} 
-    } else if (quicly_res == QUICLY_ERROR_FREE_CONNECTION) { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %d, ERROR_FREE_CONNECTION (res: 0x%4x).\n", stream->stream_id, quicly_res);
-	//quicly_free(stream->conn);
-	return -1;
-    } else { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %d, failed with res: 0x%4x.\n", stream->stream_id, quicly_res);
-        return -1;
-    }
-    
-    return 0;
-}
 
 void process_quic_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssize_t dgram_len)
 {
@@ -276,11 +240,11 @@ void *handle_client(void *data)
             if (ret != 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
                     tcp_fd, quic_stream->stream_id);
-		goto error;
+		        goto error;
             }
 
-	    fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
-	        tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
+	        fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
+	                    tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
         }
 
         if (FD_ISSET(quic_fd, &readfds)) { 

@@ -74,7 +74,7 @@ void *handle_isp_server(void *data)
     quicly_conn_t *quic_conn = ((worker_data_t *) data)->conn; 
     quicly_stream_t *quic_stream = ((worker_data_t *) data)->stream;
     int tcp_fd = ((worker_data_t *) data)->tcp_fd;
-    int quic_fd = ((worker_data_t *) data)->quic_fd;
+    int quic_fd = ((worker_data_t *) data)->quic_fd;  /* quic_fd is not used here. */
 
     while (1) { 
         fd_set readfds;
@@ -83,7 +83,7 @@ void *handle_isp_server(void *data)
 
         if (select(tcp_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
             fprintf(stderr, "func: %s, line: %d, thread_id: %d, [tcp: %d -> stream: %d] select filed.",  
-                __func__, __LINE__, get_current_thread_id(), tcp_fd, quic_stream->stream_id);
+                __func__, __LINE__, pthread_self(), tcp_fd, quic_stream->stream_id);
             perror("select failed");
             goto error;
         }
@@ -96,17 +96,17 @@ void *handle_isp_server(void *data)
                 goto error;
             } 
             
-            int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
-            if (ret != 0) { 
-                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
-                    tcp_fd, quic_stream->stream_id);
-		        goto error;
-            }
-
-	        fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
+            if (quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0)) {
+                quicly_streambuf_egress_write(quic_stream, buff, bytes_received);
+                
+                /* shutdown the stream after echoing all data */
+                if (quicly_recvstate_transfer_complete(&quic_stream->recvstate))
+                    quicly_streambuf_egress_shutdown(quic_stream);
+                
+	            fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
 	                    tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
+            }
         }
-
     }
 
 error:
@@ -172,24 +172,26 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         data->tcp_fd = tcp_fd;
         data->conn = stream->conn;
         data->stream = stream; 
-        data->quic_fd = quicly_get_fd(stream->conn);
+        data->quic_fd = stream->conn->sockfd;
 
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);
 	
-	fprintf(stdout, "func: %s, line: %d, worker: %p, handle [quic: %d <- tcp: %d]\n", 
-        	 __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
+	    fprintf(stdout, "func: %s, line: %d, worker: %p, handle [quic: %d <- tcp: %d]\n", 
+        	                __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
     }
 
-    if (quicly_sendstate_is_open(&stream->sendstate) && (input.len > 0)) {
-        quicly_streambuf_egress_write(stream, input.base, input.len);
-        
-        /* shutdown the stream after echoing all data */
-        if (quicly_recvstate_transfer_complete(&stream->recvstate))
-            quicly_streambuf_egress_shutdown(stream);
+    if (tcp_fd > 0 && input.len > 0) {
+        ssize_t bytes_sent = send(tcp_fd, input.base, input.len, 0);    
+        if (bytes_sent == -1) { 
+            fprintf(stderr, "[stream: %d -> tcp: %d], tcp send() failed\n", stream->stream_id, tcp_fd);
+            close(tcp_fd);
+            return;
+        }
+        fprintf(stdout, "[stream: %d -> tcp: %d], bytes: %zu sent\n", stream->stream_id, tcp_fd, bytes_sent);
     }
 
-
+    return;
 }
 
 
