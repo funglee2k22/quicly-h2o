@@ -148,30 +148,6 @@ int create_quic_conn(char *srv, short port, quicly_conn_t **conn)
     return 0;
 }
 
-bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num_dgrams)
-{       
-    for(size_t i = 0; i < num_dgrams; ++i) {
-        struct msghdr mess = {
-            .msg_name = dest,
-            .msg_namelen = quicly_get_socklen(dest),
-            .msg_iov = &dgrams[i], .msg_iovlen = 1
-        };  
-            
-        ssize_t bytes_sent;
-        while ((bytes_sent = sendmsg(fd, &mess, 0)) == -1)
-		;
-
-        if (bytes_sent == -1) {
-            perror("sendmsg failed");
-            return false;
-        } 
-
-    }   
-    
-    return true;
-}       
-
-
 void process_quic_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssize_t dgram_len)
 {
     size_t off = 0, i; 

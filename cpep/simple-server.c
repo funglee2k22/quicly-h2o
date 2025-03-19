@@ -172,23 +172,23 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         data->tcp_fd = tcp_fd;
         data->conn = stream->conn;
         data->stream = stream; 
-        data->quic_fd = stream->conn->sockfd;
+        //data->quic_fd = stream->conn->sockfd;
 
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);
 	
-	    fprintf(stdout, "func: %s, line: %d, worker: %p, handle [quic: %d <- tcp: %d]\n", 
-        	                __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
+	fprintf(stdout, "func: %s, line: %d, worker: %ld, handle [quic: %ld <- tcp: %d]\n", 
+       	                __func__, __LINE__, worker_thread, stream->stream_id, tcp_fd);
     }
 
     if (tcp_fd > 0 && input.len > 0) {
         ssize_t bytes_sent = send(tcp_fd, input.base, input.len, 0);    
         if (bytes_sent == -1) { 
-            fprintf(stderr, "[stream: %d -> tcp: %d], tcp send() failed\n", stream->stream_id, tcp_fd);
+            fprintf(stderr, "[stream: %ld -> tcp: %d], tcp send() failed\n", stream->stream_id, tcp_fd);
             close(tcp_fd);
             return;
         }
-        fprintf(stdout, "[stream: %d -> tcp: %d], bytes: %zu sent\n", stream->stream_id, tcp_fd, bytes_sent);
+        fprintf(stdout, "[stream: %ld -> tcp: %d], bytes: %zu sent\n", stream->stream_id, tcp_fd, bytes_sent);
     }
 
     return;

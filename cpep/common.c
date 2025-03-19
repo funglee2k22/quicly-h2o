@@ -181,10 +181,34 @@ bool send_dgrams_default(int fd, struct sockaddr *dest, struct iovec *dgrams, si
 
     return true;
 }
+
+bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num_dgrams)
+{
+    for(size_t i = 0; i < num_dgrams; ++i) {
+        struct msghdr mess = {
+            .msg_name = dest,
+            .msg_namelen = quicly_get_socklen(dest),
+            .msg_iov = &dgrams[i], .msg_iovlen = 1
+        };
+
+        ssize_t bytes_sent;
+        while ((bytes_sent = sendmsg(fd, &mess, 0)) == -1)
+                ;
+
+        if (bytes_sent == -1) {
+            perror("sendmsg failed");
+            return false;
+        }
+
+    }
+
+    return true;
+}
+
 int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 { 
     if (stream == NULL || !quicly_sendstate_is_open(&stream->sendstate)) {
-	quicly_debug_printf(stream->conn, "stream: %d, sendstate: %d \n", stream->stream_id, stream->sendstate);
+	quicly_debug_printf(stream->conn, "stream: %ld, sendstate_is_open: 0 \n", stream->stream_id);
         return 0;
     }	
 
@@ -193,7 +217,7 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
     #define SEND_BATCH_SIZE 16
     quicly_address_t src, dst;
     struct iovec dgrams[SEND_BATCH_SIZE];
-    uint8_t dgrams_buf[SEND_BATCH_SIZE * client_ctx.transport_params.max_udp_payload_size];
+    uint8_t dgrams_buf[SEND_BATCH_SIZE * 1500];
     size_t num_dgrams = SEND_BATCH_SIZE;
 
     int quicly_res = quicly_send(stream->conn, &dst, &src, dgrams, &num_dgrams, &dgrams_buf, sizeof(dgrams_buf)); 
@@ -207,11 +231,11 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 	    return -1;
 	} 
     } else if (quicly_res == QUICLY_ERROR_FREE_CONNECTION) { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %d, ERROR_FREE_CONNECTION (res: 0x%4x).\n", stream->stream_id, quicly_res);
+        quicly_debug_printf(stream->conn, "quicly_send stream: %ld, ERROR_FREE_CONNECTION (res: 0x%4x).\n", stream->stream_id, quicly_res);
 	//quicly_free(stream->conn);
 	return -1;
     } else { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %d, failed with res: 0x%4x.\n", stream->stream_id, quicly_res);
+        quicly_debug_printf(stream->conn, "quicly_send stream: %ld, failed with res: 0x%4x.\n", stream->stream_id, quicly_res);
         return -1;
     }
     
