@@ -166,6 +166,70 @@ void process_quic_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssiz
     return ; 
 }
 
+void *quic_sk_watcher(void *data)
+{
+    quicly_conn_t *conn = ((worker_data_t *)data)->conn;
+    int quic_fd = ((worker_data_t *)data)->quic_fd;
+
+    while (1) {
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(quic_fd, &readfds); 
+
+        if (select(quic_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+            perror("select failed");
+            break;   
+        }    
+
+        if (FD_ISSET(quic_fd, &readfds)) { 
+            uint8_t buf[4096];
+            struct sockaddr_storage sa; 
+            struct iovec vec = {.iov_base = buf, .iov_len = sizeof(buf)};
+            struct msghdr msg = {.msg_name = &sa, .msg_namelen = sizeof(sa), .msg_iov = &vec, .msg_iovlen = 1};
+            ssize_t rret = 0;
+            while ((rret = recvmsg(quic_fd, &msg, 0)) == -1)
+                ;
+ 
+            fprintf(stdout, "[quic_sk_fd: %d] quic read %d bytes.\n", quic_fd, rret);
+            
+            if (rret > 0)
+                process_quic_msg(quic_fd, conn, &msg, rret);
+        }
+
+        //if anything needs to be sent 
+        quicly_address_t dest, src;
+        struct iovec dgrams[10];
+        uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * client_ctx.transport_params.max_udp_payload_size];
+        size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
+        int ret = quicly_send(conn, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
+        switch (ret) {
+        case 0: {
+            size_t j;
+            for (j = 0; j != num_dgrams; ++j) {
+                struct msghdr mess = {.msg_name = &dest.sa, .msg_namelen = quicly_get_socklen(&dest.sa), 
+                                          .msg_iov = &dgrams[j], .msg_iovlen = 1};
+                sendmsg(quic_fd, &mess, MSG_DONTWAIT);
+            }
+            break;
+        }
+        case QUICLY_ERROR_FREE_CONNECTION:
+            fprintf(stderr, "free connection\n");
+            quicly_free(conn);            
+            break;
+        default:
+            fprintf(stderr, "quicly_send returned with error %d\n", ret);
+            break;    
+        }        
+
+    }
+
+    fprintf(stderr, "quic_sk_cleanner thread exit.\n");
+    close(quic_fd);
+
+    return NULL;
+}
+
 
 void *handle_client(void *data)
 {  
@@ -205,10 +269,9 @@ void *handle_client(void *data)
     while (1) { 
         fd_set readfds;
         FD_ZERO(&readfds);
-        FD_SET(quic_fd, &readfds);
         FD_SET(tcp_fd, &readfds);
 
-        if (select(tcp_fd > quic_fd ? tcp_fd + 1 : quic_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+        if (select(tcp_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
             perror("select failed");
                 goto error;
         }    
@@ -219,35 +282,11 @@ void *handle_client(void *data)
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
             } 
-            
-            int ret = quicly_send_msg(quic_fd, quic_stream, (void *)buff, bytes_received);
-            if (ret != 0) { 
-                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] failed to send to quic stream.\n", 
-                    tcp_fd, quic_stream->stream_id);
-		        goto error;
-            }
 
 	        fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
 	                    tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
         }
 
-        if (FD_ISSET(quic_fd, &readfds)) { 
-            uint8_t buf[4096];
-            struct sockaddr_storage sa; 
-            struct iovec vec = {.iov_base = buf, .iov_len = sizeof(buf)};
-            struct msghdr msg = {.msg_name = &sa, .msg_namelen = sizeof(sa), .msg_iov = &vec, .msg_iovlen = 1};
-            ssize_t rret = 0;
-            while ((rret = recvmsg(quic_fd, &msg, 0)) == -1)
-                ;
- 
-            fprintf(stdout, "[tcp: %d <- quic_sk_fd: %d] quic read %d bytes.\n", 
-                    tcp_fd, quic_fd, rret);
-            
-            if (rret > 0)
-                process_quic_msg(quic_fd, quic_conn, &msg, rret);
-        }
-
-        
     }
 
 error:
@@ -255,6 +294,8 @@ error:
     //TODO close QUIC stream also
     return NULL;
 }
+
+
 
 void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
 {  
