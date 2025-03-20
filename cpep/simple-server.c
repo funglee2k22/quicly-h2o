@@ -61,7 +61,7 @@ static void ctrl_stream_on_receive(quicly_stream_t *stream, size_t off, const vo
     } 
 
     fprintf(stderr, "QUIC control stream [%d], bytes_received: %zu\n", stream->stream_id, input.len);
-    fprintf(stderr, "control message: %.*s\n", (int)input.len, (char *)input.base);
+    fprintf(stderr, "ctrl msg: %.*s\n", (int)input.len, (char *)input.base);
 
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
@@ -94,17 +94,24 @@ void *handle_isp_server(void *data)
             if (bytes_received < 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
-            } 
+            }
             
-            if (quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0)) {
+            if (!quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0))
+                quicly_get_or_open_stream(quic_stream->conn, quic_stream->stream_id, &quic_stream);
+
+            if (quic_stream && quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0)) {
                 quicly_streambuf_egress_write(quic_stream, buff, bytes_received);
                 
                 /* shutdown the stream after echoing all data */
-                if (quicly_recvstate_transfer_complete(&quic_stream->recvstate))
-                    quicly_streambuf_egress_shutdown(quic_stream);
+                //if (quicly_recvstate_transfer_complete(&quic_stream->recvstate))
+                //    quicly_streambuf_egress_shutdown(quic_stream);
                 
                 fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
                         tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
+            } else { 
+                fprintf(stderr, "[tcp: %d -> stream: %ld] quic stream is closed or no data to write.\n", 
+                        tcp_fd, quic_stream->stream_id);
+                break; 
             }
         }
     }
@@ -172,7 +179,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         data->tcp_fd = tcp_fd;
         data->conn = stream->conn;
         data->stream = stream; 
-        //data->quic_fd = stream->conn->sockfd;
+        data->quic_fd = stream->conn->sockfd;
 
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);

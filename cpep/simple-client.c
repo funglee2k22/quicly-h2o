@@ -72,7 +72,6 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
 
 }
 
-
 static void client_on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
     fprintf(stderr, "received STOP_SENDING: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
@@ -247,6 +246,8 @@ void *handle_client(void *data)
             if (rret > 0)
                 process_quic_msg(quic_fd, quic_conn, &msg, rret);
         }
+
+        
     }
 
 error:
