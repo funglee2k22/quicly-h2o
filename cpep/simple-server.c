@@ -179,7 +179,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         data->tcp_fd = tcp_fd;
         data->conn = stream->conn;
         data->stream = stream; 
-        data->quic_fd = stream->conn->sockfd;
+        //data->quic_fd = stream->conn->sockfd;
 
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);
