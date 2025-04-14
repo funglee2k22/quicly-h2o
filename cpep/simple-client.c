@@ -172,7 +172,6 @@ void *quic_sk_watcher(void *data)
     int quic_fd = ((worker_data_t *)data)->quic_fd;
 
     while (1) {
-
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(quic_fd, &readfds); 
@@ -281,9 +280,18 @@ void *handle_client(void *data)
             if (bytes_received < 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
-            } 
+            }
+            if (bytes_received == 0) { 
+                fprintf(stderr, "[tcp: %d -> stream: %ld] tcp side closed.\n", tcp_fd, quic_stream->stream_id);
+                break; 
+            }
 
-	        fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
+            if (quic_stream == NULL || !quicly_sendstate_is_open(&quic_stream->sendstate)) {
+                quicly_debug_printf(quic_stream->conn, "stream: %ld, sendstate_is_open: 0 \n", quic_stream->stream_id);
+                return 0;
+            }
+            quicly_streambuf_egress_write(quic_stream, buff, bytes_received); 
+	        fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic egress streambuf: %d.\n", 
 	                    tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
         }
 
@@ -301,7 +309,7 @@ void run_loop(int tcp_fd, int quic_fd, quicly_conn_t *quic)
 {  
     struct sockaddr_in tcp_remote_addr;
     socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
-    
+
     while (1) { 
         int client_fd = accept(tcp_fd, (struct sockaddr *)&tcp_remote_addr, &tcp_addr_len);
         if (client_fd < 0) {
@@ -381,6 +389,13 @@ int main(int argc, char **argv)
 	    return -1;
         }
     }
+
+    pthread_t quic_watcher;
+    worker_data_t *watcher_data = (worker_data_t *)malloc(sizeof(worker_data_t));
+    watcher_data->quic_fd = quic_fd;
+    watcher_data->conn = conn;
+    pthread_create(&quic_watcher, NULL, quic_sk_watcher, (void *)watcher_data);
+	fprintf(stdout, "func: %s, line: %d, quic_sk_watcher: %p.\n", __func__, __LINE__, quic_watcher);
     
     //TODO: adding a control thread to send ping-pong  
     run_loop(tcp_fd, quic_fd, conn); 

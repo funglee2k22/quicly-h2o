@@ -208,7 +208,7 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
 int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 { 
     if (stream == NULL || !quicly_sendstate_is_open(&stream->sendstate)) {
-	quicly_debug_printf(stream->conn, "stream: %ld, sendstate_is_open: 0 \n", stream->stream_id);
+	    quicly_debug_printf(stream->conn, "stream: %ld, sendstate_is_open: 0 \n", stream->stream_id);
         return 0;
     }	
 

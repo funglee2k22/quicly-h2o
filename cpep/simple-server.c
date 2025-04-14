@@ -265,31 +265,6 @@ int create_tcp_connection(struct sockaddr *sa)
     return fd;
 }
 
-#if 0
-int create_tcp_connection(char *host, short port)
-{
-    int fd;
-    struct sockaddr_in sa;
-
-    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        perror("socket failed");
-        return -1;
-    }
-
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(port);
-    inet_pton(AF_INET, host, &sa.sin_addr);
-
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) == -1) {
-        perror("connect failed");
-        close(fd);
-        return -1;
-    }
-
-    return fd;
-}
-#endif
-
 static void process_quicly_msg(int quic_fd, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
 {
     size_t off = 0, i;
@@ -331,7 +306,6 @@ void run_server_loop(int quic_srv_fd)
             FD_ZERO(&readfds);
             FD_SET(quic_srv_fd, &readfds); 
         } while (select(quic_srv_fd + 1, &readfds, NULL, NULL, &tv) == -1 && errno == EINTR);
-        
         
         if (FD_ISSET(quic_srv_fd, &readfds)) {
             uint8_t buf[4096];
