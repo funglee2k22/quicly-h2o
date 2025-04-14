@@ -239,6 +239,17 @@ void *quic_sk_watcher(void *data)
     return NULL;
 }
 
+int quicly_write_msg_buff(quicly_stream_t *stream, void *buf, size_t len)
+{ 
+    if (stream == NULL || !quicly_sendstate_is_open(&stream->sendstate)) {
+	    quicly_debug_printf(stream->conn, "stream: %ld, sendstate_is_open: 0 \n", stream->stream_id);
+        return 0;
+    }	
+    
+    quicly_streambuf_egress_write(stream, buf, len);
+
+    return 0;
+}
 
 void *handle_client(void *data)
 {  
@@ -267,7 +278,7 @@ void *handle_client(void *data)
             ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
 
     //send the original destination address to QUIC server 
-    if (quicly_send_msg(quic_fd, quic_stream, (void *)&orig_dst, len) != 0) { 
+    if (quicly_write_msg_to_buff(quic_stream, (void *)&orig_dst, len) != 0) { 
         quicly_debug_printf(quic_stream->conn, "sending original connection header failed.\n");
         goto error;
     }
@@ -290,7 +301,13 @@ void *handle_client(void *data)
             if (bytes_received < 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
-            } 
+            }
+
+            if (quiely_write_msg_buff(quic_stream, buff, bytes_received) != 0) { 
+                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] quicly_write_msg_buff() failed.\n", 
+                     tcp_fd, quic_stream->stream_id);
+                goto error;
+            }
 
 	        fprintf(stdout, "[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
 	                    tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
