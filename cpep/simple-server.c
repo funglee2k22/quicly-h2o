@@ -305,7 +305,7 @@ void run_server_loop(int quic_srv_fd)
         do {
             FD_ZERO(&readfds);
             FD_SET(quic_srv_fd, &readfds); 
-        } while (select(quic_srv_fd + 1, &readfds, NULL, NULL, &tv) == -1 && errno == EINTR);
+        } while (select(quic_srv_fd + 1, &readfds, NULL, NULL, &tv) == -1);
         
         if (FD_ISSET(quic_srv_fd, &readfds)) {
             uint8_t buf[4096];

@@ -239,7 +239,7 @@ void *quic_sk_watcher(void *data)
     return NULL;
 }
 
-int quicly_write_msg_buff(quicly_stream_t *stream, void *buf, size_t len)
+int quicly_write_msg_to_buff(quicly_stream_t *stream, void *buf, size_t len)
 { 
     if (stream == NULL || !quicly_sendstate_is_open(&stream->sendstate)) {
 	    quicly_debug_printf(stream->conn, "stream: %ld, sendstate_is_open: 0 \n", stream->stream_id);
@@ -303,7 +303,7 @@ void *handle_client(void *data)
                 goto error;
             }
 
-            if (quiely_write_msg_buff(quic_stream, buff, bytes_received) != 0) { 
+            if (quicly_write_msg_to_buff(quic_stream, buff, bytes_received) != 0) { 
                 quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] quicly_write_msg_buff() failed.\n", 
                      tcp_fd, quic_stream->stream_id);
                 goto error;
