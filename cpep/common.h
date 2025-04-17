@@ -32,14 +32,14 @@ typedef struct pthread_work {
     quicly_stream_t *stream; 
 } worker_data_t; 
 
-void __debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
-    __attribute__((format(printf, 4, 5)));
+void __debug_printf(const char *function, int line, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
 
 #ifdef quicly_debug_printf
 #undef quicly_debug_printf
 #endif 
 
-#define quicly_debug_printf(conn, ...)  __debug_printf((conn), __FUNCTION__, __LINE__, __VA_ARGS__)
+#define log_debug(...)  __debug_printf(__FUNCTION__, __LINE__, __VA_ARGS__)
 
 int find_tcp_conn(conn_stream_pair_node_t *head, quicly_stream_t *stream);
 
