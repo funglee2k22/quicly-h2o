@@ -168,7 +168,7 @@ int quicly_write_msg_to_buff(quicly_stream_t *stream, void *buf, size_t len)
 void handle_client(int quic_fd, quicly_stream_t *quic_stream) 
 {
     int i = 0;
-    while (1) { 
+    while (i <= 2) { 
         fd_set readfds; 
 	struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
 	
@@ -186,7 +186,7 @@ void handle_client(int quic_fd, quicly_stream_t *quic_stream)
             while ((rret = recvmsg(quic_fd, &msg, 0)) == -1)
                 ;
 
-            fprintf(stdout, "[quic_sk_fd: %d] quic read %ld bytes.\n", quic_fd, rret);
+            log_debug("[quic_sk_fd: %d] quic read %ld bytes.\n", quic_fd, rret);
             if (rret > 0)
                 process_quic_msg(quic_fd, quic_stream->conn, &msg, rret);
         } else { 
@@ -209,12 +209,14 @@ void handle_client(int quic_fd, quicly_stream_t *quic_stream)
                 struct msghdr mess = {.msg_name = &dest.sa, .msg_namelen = quicly_get_socklen(&dest.sa), 
                                           .msg_iov = &dgrams[j], .msg_iovlen = 1};
                 sendmsg(quic_fd, &mess, MSG_DONTWAIT);
+		log_debug("sent %d bytes message to remote.\n", dgrams[j].iov_len);
 	    }
 	} else if (ret == QUICLY_ERROR_FREE_CONNECTION) { 
-	    fprintf(stdout, "func: %s, line: %d, ret: %d, connection closed.\n", __func__, __LINE__, ret);
+	    log_debug("ret: %d, connection closed.\n", ret);
+
 	} else if (ret == 0 && num_dgrams == 0) {
-            fprintf(stdout, "func: %s, line: %d, ret: %d, nums_dgrams: %d, nothing to send.\n",
-			    __func__, __LINE__, ret, num_dgrams);
+            log_debug("ret: %d, nums_dgrams: %d, nothing to send.\n",
+			    ret, num_dgrams);
 	}
     }
 
