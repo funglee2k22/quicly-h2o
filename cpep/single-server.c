@@ -88,7 +88,7 @@ void *handle_isp_server(void *data)
             char buff[4096];
             int bytes_received = read(tcp_fd, buff, sizeof(buff)); 
             if (bytes_received < 0) { 
-                quicly_debug_printf(quic_stream->conn, "[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
+                log_debug("[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
             }
             
@@ -145,11 +145,11 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
 
-    log_debug("QUIC stream [%d], bytes_received: %d,\n", stream->stream_id, input.len);
+    log_debug("QUIC stream [%ld], bytes_received: %d,\n", stream->stream_id, input.len);
 
     int tcp_fd = find_tcp_conn(mmap_head.next, stream); 
     while (tcp_fd < 0) {
-        log_debug("no TCP connection found for QUIC stream [%d].\n", stream->stream_id);
+        log_debug("no TCP connection found for QUIC stream [%ld].\n", stream->stream_id);
         ////assume the first 16 bytes of QUIC message is the original destination address
         struct sockaddr_storage orig_dst;
         socklen_t len = sizeof(orig_dst);
@@ -311,7 +311,7 @@ void run_server_loop(int quic_srv_fd)
             ssize_t rret;
             while ((rret = recvmsg(quic_srv_fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
-            debug_log("read %ld bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
+            log_debug("read %ld bytes data from UDP sockets [%d]\n", rret, quic_srv_fd);
             if (rret > 0)
                 process_quicly_msg(quic_srv_fd, conns, &msg, rret);
         } else { 
@@ -390,11 +390,11 @@ int main(int argc, char **argv)
 
     int quic_srv_fd = create_udp_listener(udp_listen_port); 
     if (quic_srv_fd < 0) {
-        debug_log(stderr, "failed to create UDP listener on port %d.\n", udp_listen_port);
+        log_debug("failed to create UDP listener on port %d.\n", udp_listen_port);
         return -1;
     }
 
-    debug_log("QPEP Server is running, pid: %lu, UDP listening port: %d, sk_fd: %d\n", 
+    log_debug("QPEP Server is running, pid: %lu, UDP listening port: %d, sk_fd: %d\n", 
             (uint64_t)getpid(), udp_listen_port, quic_srv_fd);
     
     run_server_loop(quic_srv_fd);

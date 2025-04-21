@@ -65,14 +65,14 @@ static void client_on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
     fprintf(stderr, "received STOP_SENDING: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
-    quicly_debug_printf(stream->conn, "stream: %ld received STOP_SENDING, and called quicly_close()\n", stream->stream_id);
+    log_debug("stream: %ld received STOP_SENDING, and called quicly_close()\n", stream->stream_id);
 }
 
 static void client_on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     fprintf(stderr, "received RESET_STREAM: %lu \n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
-    quicly_debug_printf(stream->conn, "stream: %ld received reset_stream, and called quicly_close()\n", stream->stream_id);
+    log_debug("stream: %ld received reset_stream, and called quicly_close()\n", stream->stream_id);
 }
 
 
@@ -92,7 +92,7 @@ static quicly_error_t client_on_stream_open(quicly_stream_open_t *self, quicly_s
         return ret;
     stream->callbacks = &stream_callbacks;
     
-    quicly_debug_printf(stream->conn, "stream: %ld opened\n", stream->stream_id);
+    log_debug("stream: %ld opened\n", stream->stream_id);
     return 0;
 }
  
@@ -132,7 +132,7 @@ int create_quic_conn(char *srv, short port, quicly_conn_t **conn)
         return -1;
     }
 
-    quicly_debug_printf(*conn, "quicly_connect() successful\n");
+    log_debug("quicly_connect() successful\n");
     return 0;
 }
 
@@ -244,11 +244,17 @@ int main(int argc, char **argv)
         return -1;
     }
 
+
     quicly_stream_t *nstream = NULL; 
     if (quicly_open_stream(conn, &nstream, 0) != 0) {
         fprintf(stderr, "quicly_open_stream() failed\n");
     	return -1;
     }
+
+
+    if (!quicly_connection_is_ready(conn)) { 
+ 	log_debug("connection is not ready\n");
+    } 
 
     handle_client(quic_fd, nstream);
 

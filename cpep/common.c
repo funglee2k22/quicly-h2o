@@ -22,16 +22,22 @@ ptls_context_t *get_tlsctx()
 }
 
 
-void __debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
+void _debug_printf(const char *function, int line, const char *fmt, ...)
 { 
     char buf[1024];
     va_list args;
+    time_t current_time; 
+    char time_string[50]; 
+    
 
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-
-    fprintf(stdout, "quicly_conn: %p, func: %s, line: %d, %s", conn, function, line, buf);
+    current_time = time(NULL);
+    struct tm *time_info  = localtime(&current_time); 
+    
+    strftime(time_string, sizeof(time_string), "%Y-%m-%d %H:%M:%S " , time_info);
+    fprintf(stdout, "time: %s, func: %s, line: %d, %s", time_string, function, line, buf);
     return;
 
 }
@@ -41,8 +47,6 @@ int find_tcp_conn(conn_stream_pair_node_t *head, quicly_stream_t *stream)
     conn_stream_pair_node_t *p = head; 
     int i = 0; 
     while (p) {
-	//fprintf(stdout, "pair node[%d]: {tcp_fd: %d, stream: %p, stream_id: %d}, target_stream_id: %d\n", 
-	//	       i, p->fd, p->stream, p->stream->stream_id, stream->stream_id);	
         if (p->stream == stream)
             return p->fd;
 	i++;
@@ -208,7 +212,7 @@ bool send_dgrams(int fd, struct sockaddr *dest, struct iovec *dgrams, size_t num
 int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 { 
     if (stream == NULL || !quicly_sendstate_is_open(&stream->sendstate)) {
-	    quicly_debug_printf(stream->conn, "stream: %ld, sendstate_is_open: 0 \n", stream->stream_id);
+    	log_debug("stream: %ld, sendstate_is_open: 0 \n", stream->stream_id);
         return 0;
     }	
 
@@ -224,18 +228,18 @@ int quicly_send_msg(int quic_fd, quicly_stream_t *stream, void *buf, size_t len)
 
     if (quicly_res == 0) {
 	if (num_dgrams == 0) { 
-            quicly_debug_printf(stream->conn, "quicly_send() nothing to send.\n");
+            log_debug("quicly_send() nothing to send.\n");
 	    return 0;
 	}
         if (!send_dgrams(quic_fd, &dst.sa, dgrams, num_dgrams)) { 
 	    return -1;
 	} 
     } else if (quicly_res == QUICLY_ERROR_FREE_CONNECTION) { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %ld, ERROR_FREE_CONNECTION (res: 0x%4x).\n", stream->stream_id, quicly_res);
+        log_debug("quicly_send stream: %ld, ERROR_FREE_CONNECTION (res: 0x%4x).\n", stream->stream_id, quicly_res);
 	//quicly_free(stream->conn);
 	return -1;
     } else { 
-        quicly_debug_printf(stream->conn, "quicly_send stream: %ld, failed with res: 0x%4x.\n", stream->stream_id, quicly_res);
+        log_debug("quicly_send stream: %ld, failed with res: 0x%4x.\n", stream->stream_id, quicly_res);
         return -1;
     }
     
