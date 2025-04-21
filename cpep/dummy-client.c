@@ -50,8 +50,8 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     memcpy(buff, input.base, len);
 
     fprintf(stdout, "func: %s, line: %d, stream: %ld, received bytes: %ld \n, msg: [%s]\n", 
-		    __func__, __LINE__,
-		    stream->stream_id, len, buff);
+            __func__, __LINE__,
+            stream->stream_id, len, buff);
 
     /* initiate connection close after receiving all data */
     if (quicly_recvstate_transfer_complete(&stream->recvstate))
@@ -170,12 +170,12 @@ void handle_client(int quic_fd, quicly_stream_t *quic_stream)
     int i = 0;
     while (i <= 2) { 
         fd_set readfds; 
-	struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
-	
-	do { 
+        struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+    
+        do { 
             FD_ZERO(&readfds);
             FD_SET(quic_fd, &readfds);
-	} while (select(quic_fd + 1, &readfds, NULL, NULL, &tv) == -1);
+        } while (select(quic_fd + 1, &readfds, NULL, NULL, &tv) == -1);
 
         if (FD_ISSET(quic_fd, &readfds)) {
             uint8_t buf[4096];
@@ -190,7 +190,7 @@ void handle_client(int quic_fd, quicly_stream_t *quic_stream)
             if (rret > 0)
                 process_quic_msg(quic_fd, quic_stream->conn, &msg, rret);
         } else { 
-   	    char temp[1024] = {0};
+           char temp[1024] = {0};
             sprintf(temp, "test iter: %d \n", i++);
             quicly_write_msg_to_buff(quic_stream, (void *)temp, strlen(temp) + 1);	
         } 
@@ -201,23 +201,23 @@ void handle_client(int quic_fd, quicly_stream_t *quic_stream)
         size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
 
         int ret = quicly_send(quic_stream->conn, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
-	
-	if (ret == 0 && num_dgrams > 0) {
-	    //someting to send;
+    
+    if (ret == 0 && num_dgrams > 0) {
+        //someting to send;
             size_t j;
             for (j = 0; j != num_dgrams; ++j) {
                 struct msghdr mess = {.msg_name = &dest.sa, .msg_namelen = quicly_get_socklen(&dest.sa), 
                                           .msg_iov = &dgrams[j], .msg_iovlen = 1};
                 sendmsg(quic_fd, &mess, MSG_DONTWAIT);
-		log_debug("sent %d bytes message to remote.\n", dgrams[j].iov_len);
-	    }
-	} else if (ret == QUICLY_ERROR_FREE_CONNECTION) { 
-	    log_debug("ret: %d, connection closed.\n", ret);
+        log_debug("sent %d bytes message to remote.\n", dgrams[j].iov_len);
+        }
+    } else if (ret == QUICLY_ERROR_FREE_CONNECTION) { 
+        log_debug("ret: %d, connection closed.\n", ret);
 
-	} else if (ret == 0 && num_dgrams == 0) {
+    } else if (ret == 0 && num_dgrams == 0) {
             log_debug("ret: %d, nums_dgrams: %d, nothing to send.\n",
-			    ret, num_dgrams);
-	}
+                ret, num_dgrams);
+    }
     }
 
     return;
@@ -250,12 +250,12 @@ int main(int argc, char **argv)
     quicly_stream_t *nstream = NULL; 
     if (quicly_open_stream(conn, &nstream, 0) != 0) {
         fprintf(stderr, "quicly_open_stream() failed\n");
-    	return -1;
+        return -1;
     }
 
 
     if (!quicly_connection_is_ready(conn)) { 
- 	log_debug("connection is not ready\n");
+     log_debug("connection is not ready\n");
     } 
 
     handle_client(quic_fd, nstream);
