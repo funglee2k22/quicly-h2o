@@ -278,6 +278,44 @@ int send_egress_udp_packets(int fd, quicly_conn_t *conn)
     return ret;
 }
 
+void *tcp_socket_handler(void *data)
+{ 
+    worker_data_t *worker = (worker_data_t *)data;
+    int fd = worker->tcp_fd;
+    quicly_stream_t *stream = worker->stream; 
+
+    log_debug("starting TCP socket handler...\n"); 
+
+    while (1) {
+        fd_set readfds;
+        struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+        
+        do { 
+            FD_ZERO(&readfds);
+            FD_SET(fd, &readfds); 
+        } while (select(fd + 1, &readfds, NULL, NULL, &tv) == -1);
+        
+        if (FD_ISSET(fd, &readfds)) {
+            char buff[4096];
+            int bytes_received = read(fd, buff, sizeof(buff)); 
+            if (bytes_received < 0) { 
+                log_debug("TCP sk [%d] read error.\n", fd);
+                break;
+            }
+
+            if (quicly_write_msg_to_buff(stream, buff, bytes_received) != 0) { 
+                log_debug("quicly_write_msg_to_buff() failed.\n");
+                break;
+            }
+            log_debug("write %d bytes to quic stream: %ld.\n", bytes_received, stream->stream_id);
+        }
+    }
+
+    log_debug("TCP socket handler exiting...\n");
+    close(fd);
+    return NULL;
+} 
+
 void *udp_socket_handler(void *data) 
 {  
     worker_data_t *worker = (worker_data_t *)data;
@@ -333,6 +371,27 @@ void *udp_socket_handler(void *data)
     log_debug("UDP socket handler exiting...\n");
     close(quic_fd);
     return NULL;
+}
+
+
+void get_tcp_orig_dst(int fd, struct sockaddr_in *dst)
+{
+    socklen_t len = sizeof(*dst); 
+
+#ifndef SO_ORIGINAL_DST
+#define SO_ORIGINAL_DST 80
+#endif
+
+#ifdef SO_ORIGINAL_DST       	
+    if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, dst, &len) != 0) {
+        log_debug("getsockopt() error:  \n");
+        return;
+    }
+#endif
+    log_debug("TCP connection original destination addr.: %s:%d\n", 
+                inet_ntoa(((struct sockaddr_in *)&dst)->sin_addr), 
+                ntohs(((struct sockaddr_in *)&dst)->sin_port));
+    return;
 }
 
 
@@ -394,12 +453,46 @@ int main(int argc, char **argv)
 
         log_debug("accepted a new TCP connection from %s:%d\n", 
             inet_ntoa(tcp_remote_addr.sin_addr), ntohs(tcp_remote_addr.sin_port));
-         
-         	
+
+        get_tcp_orig_dst(client_fd, &tcp_remote_addr);
+        
+        quicly_stream_t *nstream = NULL; 
+        if ((ret = quicly_open_stream(conn, &nstream, 0)) != 0) { 
+            log_debug("quic conn failed to open quicly_open_stream() failed: (ret: %d)\n", ret);
+            close(client_fd);
+            continue;
+        }
+
+        if (quicly_write_msg_to_buff(nstream, (void *)&tcp_remote_addr, tcp_addr_len) != 0) { 
+            log_debug("sending original connection header failed.\n");
+            close(client_fd);
+            quicly_streambuf_destroy(nstream);
+            continue;
+        }
+
+        conn_stream_pair_node_t  *node = (conn_stream_pair_node_t *)malloc(sizeof(conn_stream_pair_node_t));
+        node->fd = client_fd;
+        node->stream = nstream;
+        node->next = mmap_head.next;
+        mmap_head.next = node;
+        log_debug("added new tcp_sk: %d, quic stream: %ld to mmap list.\n", client_fd, nstream->stream_id);
+        
+        worker_data_t *data = (worker_data_t *)malloc(sizeof(worker_data_t));
+        data->tcp_fd = client_fd;
+        data->quic_fd = quic_fd;
+        data->conn = conn;
+        data->stream = nstream;
+        pthread_t tcp_worker_thread;
+
+        pthread_create(&tcp_worker_thread, NULL, tcp_socket_handler, (void *)data);
+        pthread_detach(tcp_worker_thread);
+        log_debug("TCP socket handler thread %p created for [tcp: %d <-> stream: %ld].\n", 
+            tcp_fd, nstream->stream_id, tcp_worker_thread);
+        
+    }   
+        
        
-    }
-
-
 }
+
 
 
