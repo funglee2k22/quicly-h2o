@@ -128,7 +128,7 @@ TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_D
 ADD_EXECUTABLE(echo-server ${PICOTLS_OPENSSL_FILES} cpep/echo-server.c)
 TARGET_LINK_LIBRARIES(echo-server quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
 
-ADD_EXECUTABLE(cpep-clt ${PICOTLS_OPENSSL_FILES} cpep/single-client.c cpep/common.c)
+ADD_EXECUTABLE(cpep-clt ${PICOTLS_OPENSSL_FILES} cpep/single-client2.c cpep/common.c)
 TARGET_LINK_LIBRARIES(cpep-clt quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
 
 ADD_EXECUTABLE(dummy-clt ${PICOTLS_OPENSSL_FILES} cpep/dummy-client.c cpep/common.c)

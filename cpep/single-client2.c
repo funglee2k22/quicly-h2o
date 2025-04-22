@@ -150,7 +150,7 @@ int create_quic_conn(char *srv, short port, quicly_conn_t **conn)
     return 0;
 }
 
-void process_quic_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssize_t dgram_len)
+void process_quicly_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssize_t dgram_len)
 {
     size_t off = 0; 
     struct sockaddr sa;
@@ -163,13 +163,15 @@ void process_quic_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssiz
         int ret = quicly_receive(conn, NULL, msg->msg_name, &decoded);
         if (ret != 0 && ret != QUICLY_ERROR_PACKET_IGNORED) {
            log_debug("quicly_receive returned %i\n", ret);
-                 return;
+           return;
         } 
-        
+       
+#if 0	
         if (!quicly_connection_is_ready(conn)) { 
             log_debug("quicly_connction_is_ready() return false\n");
             return;
         }
+#endif
     }
 
     return ; 
@@ -236,7 +238,8 @@ int read_ingress_udp_message(int fd, quicly_conn_t *conn)
     while ((rret = recvmsg(fd, &msg, 0)) == -1 && errno == EINTR)
         ;
     
-    log_debug(stderr, "read %ld bytes data from UDP sockets [%d]\n", rret, fd);
+    log_debug("read %ld bytes data from UDP sockets [%d]\n", rret, fd);
+
     if (rret > 0)
         process_quicly_msg(fd, conn, &msg, rret);
     
@@ -250,7 +253,11 @@ int send_egress_udp_packets(int fd, quicly_conn_t *conn)
     uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * client_ctx.transport_params.max_udp_payload_size];
     size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
 
+    log_debug("entering...\n");
+
     int ret = quicly_send(conn, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
+
+    log_debug("quicly_send returns &d\n", ret);
     
     if (ret == 0 && num_dgrams > 0) {
         //someting to send;
@@ -280,7 +287,7 @@ void *udp_socket_handler(void *data)
     log_debug("starting UDP socket handler...\n"); 
     
     while (1) {
-        struct timeval tv = {.tv_sec = 5, .tv_usec = 0}; 
+        struct timeval tv = {.tv_sec = 1, .tv_usec = 0}; 
         fd_set readfds;
 
         do {
@@ -291,20 +298,37 @@ void *udp_socket_handler(void *data)
         if (FD_ISSET(quic_fd, &readfds)) {
             read_ingress_udp_message(quic_fd, conn);
         } else {
-            log_debug("select() timeout, no data to read from UDP socket.\n");
-            quicly_stream_t *ctrl_stream = NULL;
-            quicly_get_or_open_stream(conn, &ctrl_stream, 0);
+   	    quicly_stream_t *ctrl_stream = quicly_get_stream(conn, 0);
             if (quicly_write_msg_to_buff(ctrl_stream, "client is still alive!", strlen("client is still alive!")) != 0) {
                 log_debug("quicly_write_msg_to_buff() failed.\n");
                 break;
             }
             log_debug("write keep-alive msg successfully.\n");
-        } 
 
-        if (send_egress_udp_packets(conn, quic_fd) < 0) {
-            log_debug("send_egress_udp_packets() failed.\n");
-            break;
-        }
+	}
+
+        //if anything needs to be sent
+        quicly_address_t dest, src;
+        struct iovec dgrams[10];
+        uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * client_ctx.transport_params.max_udp_payload_size];
+        size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
+
+        int ret = quicly_send(conn, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
+
+        if (ret == 0 && num_dgrams > 0) {
+            //someting to send;
+            size_t j;
+            for (j = 0; j != num_dgrams; ++j) {
+                struct msghdr mess = {.msg_name = &dest.sa, .msg_namelen = quicly_get_socklen(&dest.sa),
+                                          .msg_iov = &dgrams[j], .msg_iovlen = 1};
+                sendmsg(quic_fd, &mess, MSG_DONTWAIT);
+                log_debug("sent %d bytes message to remote.\n", dgrams[j].iov_len);
+            }
+        } else if (ret == QUICLY_ERROR_FREE_CONNECTION) {
+            log_debug("ret: %d, connection closed.\n", ret);
+        } else if (ret == 0 && num_dgrams == 0) {
+            //log_debug("ret: %d, nums_dgrams: %d, nothing to send.\n", ret, num_dgrams);
+        }	
     }
     log_debug("UDP socket handler exiting...\n");
     close(quic_fd);
@@ -350,6 +374,13 @@ int main(int argc, char **argv)
     
     pthread_detach(worker_thread);
     log_debug("UDP socket handler thread created.\n");
+
+    tcp_fd = create_tcp_listener(tcp_lstn_port);
+    if (tcp_fd < 0) {
+        log_debug("failed to create tcp listener on port %d\n", tcp_lstn_port);
+        return -1;
+    }
+
     while (1) {
         struct sockaddr_in tcp_remote_addr;
         socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
@@ -363,9 +394,9 @@ int main(int argc, char **argv)
 
         log_debug("accepted a new TCP connection from %s:%d\n", 
             inet_ntoa(tcp_remote_addr.sin_addr), ntohs(tcp_remote_addr.sin_port));
-        
-        log_debug("TBD debugging...\n");
-        // handle_client(client_fd, quic_fd, conn);
+         
+         	
+       
     }
 
 
