@@ -336,13 +336,14 @@ void *udp_socket_handler(void *data)
         if (FD_ISSET(quic_fd, &readfds)) {
             read_ingress_udp_message(quic_fd, conn);
         } else {
+#if 0
    	    quicly_stream_t *ctrl_stream = quicly_get_stream(conn, 0);
             if (quicly_write_msg_to_buff(ctrl_stream, "client is still alive!", strlen("client is still alive!")) != 0) {
                 log_debug("quicly_write_msg_to_buff() failed.\n");
                 break;
             }
             log_debug("write keep-alive msg successfully.\n");
-
+#endif
 	}
 
         //if anything needs to be sent
@@ -389,8 +390,8 @@ void get_tcp_orig_dst(int fd, struct sockaddr_in *dst)
     }
 #endif
     log_debug("TCP connection original destination addr.: %s:%d\n", 
-                inet_ntoa(((struct sockaddr_in *)&dst)->sin_addr), 
-                ntohs(((struct sockaddr_in *)&dst)->sin_port));
+                inet_ntoa(((struct sockaddr_in *)dst)->sin_addr), 
+                ntohs(((struct sockaddr_in *)dst)->sin_port));
     return;
 }
 
@@ -440,21 +441,43 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    while (1) {
-        struct sockaddr_in tcp_remote_addr;
-        socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
+    int flags = fcntl(tcp_fd, F_GETFL, 0);
 
-        int client_fd = accept(tcp_fd, (struct sockaddr *)&tcp_remote_addr, &tcp_addr_len);
+
+    // Check if socket is in blocking mode
+    if (flags & O_NONBLOCK) {
+        log_debug("TCP Socket (%d) is currently in non-blocking mode.\n", tcp_fd);
+        // Clear the non-blocking flag to switch to blocking mode
+        flags &= ~O_NONBLOCK;
+        fcntl(tcp_fd, F_SETFL, flags);
+        log_debug("TCP Socket (%d) is currently in blocking mode.\n", tcp_fd);
+    } else {
+        log_debug("TCP Socket (%d) is currently in blocking mode.\n", tcp_fd);
+    }
+
+
+
+    struct sockaddr_in tcp_remote_addr;
+    socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
+
+    while (1) {
+
+	int client_fd = accept(tcp_fd, (struct sockaddr *)&tcp_remote_addr, &tcp_addr_len);
         if (client_fd < 0) {
             log_debug("tcp_sk: %d accept() failed.\n", tcp_fd);
             close(tcp_fd);
             break;
         }
 
+
         log_debug("accepted a new TCP connection from %s:%d\n", 
             inet_ntoa(tcp_remote_addr.sin_addr), ntohs(tcp_remote_addr.sin_port));
 
-        get_tcp_orig_dst(client_fd, &tcp_remote_addr);
+	struct sockaddr_in tcp_orig_addr;
+        get_tcp_orig_dst(client_fd, &tcp_orig_addr);
+
+        log_debug("original dst to %s:%d\n", 
+            inet_ntoa(tcp_orig_addr.sin_addr), ntohs(tcp_orig_addr.sin_port));
         
         quicly_stream_t *nstream = NULL; 
         if ((ret = quicly_open_stream(conn, &nstream, 0)) != 0) { 
@@ -463,10 +486,9 @@ int main(int argc, char **argv)
             continue;
         }
 
-        if (quicly_write_msg_to_buff(nstream, (void *)&tcp_remote_addr, tcp_addr_len) != 0) { 
+        if (quicly_write_msg_to_buff(nstream, (void *)&tcp_orig_addr, tcp_addr_len) != 0) { 
             log_debug("sending original connection header failed.\n");
             close(client_fd);
-            quicly_streambuf_destroy(nstream);
             continue;
         }
 
@@ -479,7 +501,6 @@ int main(int argc, char **argv)
         
         worker_data_t *data = (worker_data_t *)malloc(sizeof(worker_data_t));
         data->tcp_fd = client_fd;
-        data->quic_fd = quic_fd;
         data->conn = conn;
         data->stream = nstream;
         pthread_t tcp_worker_thread;
@@ -487,10 +508,8 @@ int main(int argc, char **argv)
         pthread_create(&tcp_worker_thread, NULL, tcp_socket_handler, (void *)data);
         pthread_detach(tcp_worker_thread);
         log_debug("TCP socket handler thread %p created for [tcp: %d <-> stream: %ld].\n", 
-            tcp_fd, nstream->stream_id, tcp_worker_thread);
-        
-    }   
-        
+            tcp_worker_thread, tcp_fd, nstream->stream_id);
+      }
        
 }
 

@@ -36,8 +36,8 @@ void _debug_printf(const char *function, int line, const char *fmt, ...)
     current_time = time(NULL);
     struct tm *time_info  = localtime(&current_time); 
     
-    strftime(time_string, sizeof(time_string), "%Y-%m-%d %H:%M:%S " , time_info);
-    fprintf(stdout, "time: %s, func: %s, line: %d, %s", time_string, function, line, buf);
+    strftime(time_string, sizeof(time_string), "%Y-%m-%d %H:%M:%S" , time_info);
+    fprintf(stdout, "%s, func: %s, line: %d, %s", time_string, function, line, buf);
     return;
 
 }
@@ -64,18 +64,17 @@ int create_tcp_listener(short port)
         perror("socket failed");
         return -1;
     }
-     
+#if 0     
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) != 0) {
         perror("setsockopt(SO_REUSEADDR) failed");
         return -1;
     }
+#endif
 
-#ifdef IP_TRANSPARENT
     if (setsockopt(fd, SOL_IP, IP_TRANSPARENT, &(int){1}, sizeof(int)) != 0) {
         perror("setsockopt(IP_TRANSPARENT) failed");
         return -1;
-    }
-#endif
+    } 
     
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;

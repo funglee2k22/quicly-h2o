@@ -105,7 +105,7 @@ void *handle_isp_server(void *data)
                 log_debug("[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
                         tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
             } else { 
-                log_debug(stderr, "[tcp: %d -> stream: %ld] quic stream is closed or no data to write.\n", 
+                log_debug("[tcp: %d -> stream: %ld] quic stream is closed or no data to write.\n", 
                         tcp_fd, quic_stream->stream_id);
                 break; 
             }
