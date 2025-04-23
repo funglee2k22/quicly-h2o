@@ -156,12 +156,15 @@ int get_original_dest_addr(int fd, struct sockaddr_storage *sa)
 {
     socklen_t salen = sizeof(*sa);
 
-#ifdef SO_ORIGINAL_DST  
+#ifndef SO_ORIGINAL_DST 
+#define SO_ORIGINAL_DST 80
+#endif
+
     if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, sa, &salen) != 0) {
         perror("getsockopt(SO_ORIGINAL_DST) failed");
         return -1;
     }
-#endif 
+
     return 0;
 }
 

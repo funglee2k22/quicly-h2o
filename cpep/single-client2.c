@@ -153,7 +153,6 @@ int create_quic_conn(char *srv, short port, quicly_conn_t **conn)
 void process_quicly_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ssize_t dgram_len)
 {
     size_t off = 0; 
-    struct sockaddr sa;
     while (off < dgram_len) { 
         quicly_decoded_packet_t decoded; 
         size_t packet_len = quicly_decode_packet(&client_ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off); 
@@ -166,12 +165,6 @@ void process_quicly_msg(int quic_fd, quicly_conn_t *conn, struct msghdr *msg, ss
            return;
         } 
        
-#if 0	
-        if (!quicly_connection_is_ready(conn)) { 
-            log_debug("quicly_connction_is_ready() return false\n");
-            return;
-        }
-#endif
     }
 
     return ; 
@@ -257,7 +250,7 @@ int send_egress_udp_packets(int fd, quicly_conn_t *conn)
 
     int ret = quicly_send(conn, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
 
-    log_debug("quicly_send returns &d\n", ret);
+    log_debug("quicly_send returns %d\n", ret);
     
     if (ret == 0 && num_dgrams > 0) {
         //someting to send;
@@ -266,12 +259,12 @@ int send_egress_udp_packets(int fd, quicly_conn_t *conn)
             struct msghdr mess = {.msg_name = &dest.sa, .msg_namelen = quicly_get_socklen(&dest.sa), 
                                     .msg_iov = &dgrams[j], .msg_iovlen = 1};
             sendmsg(fd, &mess, MSG_DONTWAIT);
-            log_debug("sent %d bytes message to remote.\n", dgrams[j].iov_len);
+            log_debug("sent %ld bytes message to remote.\n", dgrams[j].iov_len);
         }
     } else if (ret == QUICLY_ERROR_FREE_CONNECTION) { 
         log_debug("ret: %d, connection closed (by remote peer ?).\n", ret);
     } else if (ret == 0 && num_dgrams == 0) {
-        log_debug("ret: %d, nums_dgrams: %d, nothing to send.\n", ret, num_dgrams);
+        log_debug("ret: %d, nums_dgrams: %ld, nothing to send.\n", ret, num_dgrams);
     } else { 
         log_debug("ret: %d, quicly_send() failed.\n", ret);
     }
@@ -303,11 +296,18 @@ void *tcp_socket_handler(void *data)
                 break;
             }
 
+	    if (bytes_received == 0)  
+		continue;
+
+	    log_debug("tcp: %d -> stream: %ld, read %d bytes, content:  \n%.*s\n", 
+			    fd, stream->stream_id, bytes_received, bytes_received, buff);
+
             if (quicly_write_msg_to_buff(stream, buff, bytes_received) != 0) { 
                 log_debug("quicly_write_msg_to_buff() failed.\n");
                 break;
             }
-            log_debug("write %d bytes to quic stream: %ld.\n", bytes_received, stream->stream_id);
+
+            log_debug("[tcp: %d -> stream: %ld]  write %d bytes from tcp to quic stream egress buf.\n", fd, stream->stream_id, bytes_received);
         }
     }
 
@@ -342,7 +342,8 @@ void *udp_socket_handler(void *data)
                 log_debug("quicly_write_msg_to_buff() failed.\n");
                 break;
             }
-            log_debug("write keep-alive msg successfully.\n");
+	    //TODO  always to have something to send, 
+            //log_debug("write keep-alive msg successfully.\n");
 #endif
 	}
 
@@ -361,12 +362,12 @@ void *udp_socket_handler(void *data)
                 struct msghdr mess = {.msg_name = &dest.sa, .msg_namelen = quicly_get_socklen(&dest.sa),
                                           .msg_iov = &dgrams[j], .msg_iovlen = 1};
                 sendmsg(quic_fd, &mess, MSG_DONTWAIT);
-                log_debug("sent %d bytes message to remote.\n", dgrams[j].iov_len);
+                log_debug("sent %ld bytes message to quic server.\n", dgrams[j].iov_len);
             }
         } else if (ret == QUICLY_ERROR_FREE_CONNECTION) {
             log_debug("ret: %d, connection closed.\n", ret);
         } else if (ret == 0 && num_dgrams == 0) {
-            //log_debug("ret: %d, nums_dgrams: %d, nothing to send.\n", ret, num_dgrams);
+            //log_debug("ret: %d, nums_dgrams: %ld, nothing to send.\n", ret, num_dgrams);
         }	
     }
     log_debug("UDP socket handler exiting...\n");
@@ -398,7 +399,7 @@ void get_tcp_orig_dst(int fd, struct sockaddr_in *dst)
 
 int main(int argc, char **argv)
 { 
-    char *srv = "127.0.0.1"; 
+    char *srv = "192.168.30.1"; 
     short srv_port = 4433, tcp_lstn_port = 8443; 
     int tcp_fd;   
     
@@ -440,22 +441,6 @@ int main(int argc, char **argv)
         log_debug("failed to create tcp listener on port %d\n", tcp_lstn_port);
         return -1;
     }
-
-    int flags = fcntl(tcp_fd, F_GETFL, 0);
-
-
-    // Check if socket is in blocking mode
-    if (flags & O_NONBLOCK) {
-        log_debug("TCP Socket (%d) is currently in non-blocking mode.\n", tcp_fd);
-        // Clear the non-blocking flag to switch to blocking mode
-        flags &= ~O_NONBLOCK;
-        fcntl(tcp_fd, F_SETFL, flags);
-        log_debug("TCP Socket (%d) is currently in blocking mode.\n", tcp_fd);
-    } else {
-        log_debug("TCP Socket (%d) is currently in blocking mode.\n", tcp_fd);
-    }
-
-
 
     struct sockaddr_in tcp_remote_addr;
     socklen_t tcp_addr_len = sizeof(tcp_remote_addr); 
@@ -507,7 +492,7 @@ int main(int argc, char **argv)
 
         pthread_create(&tcp_worker_thread, NULL, tcp_socket_handler, (void *)data);
         pthread_detach(tcp_worker_thread);
-        log_debug("TCP socket handler thread %p created for [tcp: %d <-> stream: %ld].\n", 
+        log_debug("TCP socket handler thread %ld created for [tcp: %d <-> stream: %ld].\n", 
             tcp_worker_thread, tcp_fd, nstream->stream_id);
       }
        
