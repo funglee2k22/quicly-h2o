@@ -69,11 +69,13 @@ static void ctrl_stream_on_receive(quicly_stream_t *stream, size_t off, const vo
 }
 
 void *handle_isp_server(void *data)
-{  
+{
+    log_debug("worker: %ld entering\n", pthread_self());
     quicly_conn_t *quic_conn = ((worker_data_t *) data)->conn; 
     quicly_stream_t *quic_stream = ((worker_data_t *) data)->stream;
     int tcp_fd = ((worker_data_t *) data)->tcp_fd;
-    int quic_fd = ((worker_data_t *) data)->quic_fd;  /* quic_fd is not used here. */
+ 
+    log_debug("worker: %ld handles tcp: %d -> stream: %ld\n", pthread_self(), tcp_fd, quic_stream->stream_id);
 
     while (1) { 
     
@@ -91,9 +93,11 @@ void *handle_isp_server(void *data)
                 log_debug("[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
             }
+
+	    log_debug("tcp: %d, received %s\n", tcp_fd, buff);
             
-            if (!quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0))
-                quicly_get_or_open_stream(quic_stream->conn, quic_stream->stream_id, &quic_stream);
+            //if (!quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0))
+            //    quicly_get_or_open_stream(quic_stream->conn, quic_stream->stream_id, &quic_stream);
 
             if (quic_stream && quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0)) {
                 quicly_streambuf_egress_write(quic_stream, buff, bytes_received);
@@ -119,6 +123,7 @@ error:
     return NULL;
 }
 
+
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     log_debug("stream: [%d] received QUIC message.\n", stream->stream_id);
@@ -138,17 +143,18 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
 
     if (input.len == 0) {
-        fprintf(stderr, "no data in receive buffer.\n");
+        log_debug("stream: %ld no data in receive buffer.\n", stream->stream_id);
         return;
     }
 
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
 
-    log_debug("QUIC stream [%ld], bytes_received: %d,\n", stream->stream_id, input.len);
+    log_debug("QUIC stream [%ld], bytes_received: %ld,\n", stream->stream_id, input.len);
 
     int tcp_fd = find_tcp_conn(mmap_head.next, stream); 
-    while (tcp_fd < 0) {
+
+    if (tcp_fd < 0) { 
         log_debug("no TCP connection found for QUIC stream [%ld].\n", stream->stream_id);
         ////assume the first 16 bytes of QUIC message is the original destination address
         struct sockaddr_storage orig_dst;
@@ -160,12 +166,18 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
                 ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
         
         tcp_fd = create_tcp_connection((struct sockaddr *)&orig_dst);
+
         if (tcp_fd < 0) {
             log_debug("failed to create TCP conn. to dest %s:%d.\n",
                     inet_ntoa(((struct sockaddr_in *)&orig_dst)->sin_addr), 
                     ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
-            break;     
+	    return;
         }
+
+        log_debug("created TCP conn. %d to dest %s:%d.\n", tcp_fd,
+                    inet_ntoa(((struct sockaddr_in *)&orig_dst)->sin_addr), 
+                    ntohs(((struct sockaddr_in *)&orig_dst)->sin_port));
+
 
         conn_stream_pair_node_t  *node = (conn_stream_pair_node_t *)malloc(sizeof(conn_stream_pair_node_t));
         node->fd = tcp_fd;
@@ -177,7 +189,6 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         data->tcp_fd = tcp_fd;
         data->conn = stream->conn;
         data->stream = stream; 
-        //data->quic_fd = stream->conn->sockfd;
 
         pthread_t worker_thread;
         pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);
@@ -257,6 +268,10 @@ int create_tcp_connection(struct sockaddr *sa)
         close(fd);
         return -1;
     }
+
+    log_debug("created tcp sk [%d] to connect %s:%d.\n", fd, 
+                inet_ntoa(((struct sockaddr_in *)sa)->sin_addr), 
+                ntohs(((struct sockaddr_in *)sa)->sin_port));
 
     return fd;
 }
