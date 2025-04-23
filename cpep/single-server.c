@@ -89,22 +89,23 @@ void *handle_isp_server(void *data)
         if (FD_ISSET(tcp_fd, &readfds)) {
             char buff[4096];
             int bytes_received = read(tcp_fd, buff, sizeof(buff)); 
+
             if (bytes_received < 0) { 
-                log_debug("[tcp: %d -> stream: %ld] tcp side error.\n", tcp_fd, quic_stream->stream_id);
+                log_debug("[tcp: %d -> stream: %ld] tcp side read error.\n", tcp_fd, quic_stream->stream_id);
                 goto error;
             }
 
-	    log_debug("tcp: %d, received %s\n", tcp_fd, buff);
+	    log_debug("[tcp: %d -> stream: %ld], received \n %.*s \n", tcp_fd, quic_stream->stream_id, bytes_received,  buff);
             
-            //if (!quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0))
-            //    quicly_get_or_open_stream(quic_stream->conn, quic_stream->stream_id, &quic_stream);
+            if (!quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0))
+            	quicly_get_or_open_stream(quic_stream->conn, quic_stream->stream_id, &quic_stream);
 
             if (quic_stream && quicly_sendstate_is_open(&quic_stream->sendstate) && (bytes_received > 0)) {
                 quicly_streambuf_egress_write(quic_stream, buff, bytes_received);
                 
-                /* shutdown the stream after echoing all data */
-                //if (quicly_recvstate_transfer_complete(&quic_stream->recvstate))
-                //    quicly_streambuf_egress_shutdown(quic_stream);
+                /* shutdown the stream after sending all data */
+                if (quicly_recvstate_transfer_complete(&quic_stream->recvstate))
+                     quicly_streambuf_egress_shutdown(quic_stream);
                 
                 log_debug("[tcp: %d -> stream: %ld] write %d bytes to quic stream: %d.\n", 
                         tcp_fd, quic_stream->stream_id, bytes_received, quic_stream->stream_id);
@@ -126,7 +127,6 @@ error:
 
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
-    log_debug("stream: [%d] received QUIC message.\n", stream->stream_id);
 
     if (stream->stream_id == 0) {
         /* control stream, handle it separately */
@@ -150,14 +150,17 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
 
-    log_debug("QUIC stream [%ld], bytes_received: %ld,\n", stream->stream_id, input.len);
+    void *buff_base = input.base;
+    int  buff_len = input.len;
+
+    log_debug("QUIC stream [%ld], %ld bytes received,\n", stream->stream_id, input.len);
 
     int tcp_fd = find_tcp_conn(mmap_head.next, stream); 
 
     if (tcp_fd < 0) { 
         log_debug("no TCP connection found for QUIC stream [%ld].\n", stream->stream_id);
         ////assume the first 16 bytes of QUIC message is the original destination address
-        struct sockaddr_storage orig_dst;
+        struct sockaddr_in orig_dst;
         socklen_t len = sizeof(orig_dst);
         memcpy(&orig_dst, input.base, len);
 
@@ -194,16 +197,20 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
         pthread_create(&worker_thread, NULL, handle_isp_server, (void *)data);
     
         log_debug("worker: %ld, handle [quic: %ld <- tcp: %d]\n", worker_thread, stream->stream_id, tcp_fd);
-    }
 
-    if (tcp_fd > 0 && input.len > 0) {
-        ssize_t bytes_sent = send(tcp_fd, input.base, input.len, 0);    
+ 	buff_len -= len; 
+	buff_base += len;
+    } 
+
+    if (tcp_fd > 0 && buff_len > 0) {
+        ssize_t bytes_sent = send(tcp_fd, buff_base, buff_len, 0);    
         if (bytes_sent == -1) { 
             log_debug("[stream: %ld -> tcp: %d], tcp send() failed\n", stream->stream_id, tcp_fd);
             close(tcp_fd);
             return;
         }
         log_debug("[stream: %ld -> tcp: %d], bytes: %zu sent\n", stream->stream_id, tcp_fd, bytes_sent);
+        log_debug("[stream: %ld -> tcp: %d], msg: %.*s sent\n", stream->stream_id, tcp_fd, bytes_sent, (char *) buff_base);
     }
 
     return;
